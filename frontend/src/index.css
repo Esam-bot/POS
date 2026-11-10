@@ -1,0 +1,209 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+
+  --color-ink: #152033;
+  --color-ink-muted: #5b6578;
+  --color-surface: #eef1f6;
+  --color-panel: #ffffff;
+  --color-line: #d9dee8;
+  --color-brand: #0f6b5c;
+  --color-brand-dark: #0a4f44;
+  --color-brand-soft: #e4f3ef;
+  --color-accent: #c45c26;
+  --color-danger: #b42318;
+  --color-warning: #b54708;
+  --color-success: #067647;
+
+  --radius-control: 0.5rem;
+  --control-height: 2.5rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--color-ink);
+  background: var(--color-surface);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+/* Readable light-surface form controls by default (overrides parent text-white) */
+input:not([type='checkbox']):not([type='radio']):not([type='file']):not([type='range']),
+select,
+textarea {
+  color: var(--color-ink);
+  background-color: #fff;
+  caret-color: var(--color-ink);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #8b93a7;
+  opacity: 1;
+}
+
+select option {
+  color: var(--color-ink);
+  background: #fff;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  color: var(--color-ink-muted);
+  background-color: #f3f5f8;
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+.app-title {
+  font-family: var(--font-display);
+  font-size: 1.625rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--color-ink);
+  line-height: 1.25;
+}
+
+.app-section-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--color-ink);
+  line-height: 1.35;
+}
+
+.app-muted {
+  font-size: 0.8125rem;
+  color: var(--color-ink-muted);
+}
+
+.app-label {
+  display: block;
+  margin-bottom: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 550;
+  color: var(--color-ink);
+}
+
+.app-card {
+  border: 1px solid var(--color-line);
+  border-radius: 0.75rem;
+  background: var(--color-panel);
+  padding: 1.25rem;
+}
+
+.app-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--color-line);
+  border-radius: 0.75rem;
+  background: #fff;
+}
+
+.app-table {
+  width: 100%;
+  min-width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.875rem;
+}
+
+.app-table thead {
+  background: var(--color-surface);
+  color: var(--color-ink-muted);
+}
+
+.app-table th {
+  padding: 0.75rem 1rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.app-table td {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--color-line);
+  color: var(--color-ink);
+  vertical-align: middle;
+}
+
+.app-table tbody tr:hover {
+  background: #f8fafc;
+}
+
+/* Dark POS/Kitchen surfaces: opt-in readable controls */
+.theme-dark input:not([type='checkbox']):not([type='radio']):not([type='file']),
+.theme-dark select,
+.theme-dark textarea {
+  color: #fff;
+  background-color: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.18);
+  caret-color: #fff;
+}
+
+.theme-dark input::placeholder,
+.theme-dark textarea::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.theme-dark select option {
+  color: var(--color-ink);
+  background: #fff;
+}
+
+/* Light panels nested inside dark shells (cart, modals, payment forms) */
+.theme-light {
+  color: var(--color-ink);
+}
+
+.theme-light .app-label,
+.theme-light label {
+  color: var(--color-ink);
+}
+
+.theme-light input:not([type='checkbox']):not([type='radio']):not([type='file']),
+.theme-light select,
+.theme-light textarea {
+  color: var(--color-ink) !important;
+  background-color: #fff !important;
+  border-color: var(--color-line);
+  caret-color: var(--color-ink);
+}
+
+.theme-light input::placeholder,
+.theme-light textarea::placeholder {
+  color: #8b93a7 !important;
+}
+
+@media print {
+  body {
+    overflow: auto;
+    background: #fff;
+    color: #000;
+  }
+}
