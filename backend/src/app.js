@@ -19,6 +19,8 @@ const reportsRoutes = require('./modules/reports/reports.routes');
 const printRoutes = require('./modules/printing/print.routes');
 const inventoryRoutes = require('./modules/inventory/inventory.routes');
 const customersRoutes = require('./modules/customers/customers.routes');
+const kitchenRoutes = require('./modules/kitchen/kitchen.routes');
+const expensesRoutes = require('./modules/expenses/expenses.routes');
 
 const app = express();
 
@@ -75,9 +77,11 @@ app.use('/api/orders', ordersRoutes);
 app.use('/api', paymentsRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/expenses', expensesRoutes);
 app.use('/api/orders/:id/print', printRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/customers', customersRoutes);
+app.use('/api/kitchen', kitchenRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

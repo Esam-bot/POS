@@ -44,16 +44,52 @@ const methodUpdate = z.object({
   sortOrder: z.coerce.number().int().optional(),
 });
 
+const methodCreate = z.object({
+  code: z
+    .string()
+    .trim()
+    .min(2)
+    .max(40)
+    .regex(/^[A-Z][A-Z0-9_]*$/, 'Code must be uppercase letters, numbers, underscores'),
+  name: z.string().trim().min(1).max(80),
+  taxRate: z.coerce.number().min(0).max(100).default(0),
+  isCash: z.boolean().optional().default(false),
+  isActive: z.boolean().optional().default(true),
+  sortOrder: z.coerce.number().int().optional(),
+});
+
 const settingsUpdate = z.object({
+  // Restaurant profile
+  name: z.string().trim().min(1).max(160).optional(),
+  address: z.string().trim().max(500).optional().nullable(),
+  phone: z.string().trim().max(40).optional().nullable(),
+  email: z
+    .string()
+    .trim()
+    .email()
+    .optional()
+    .nullable()
+    .or(z.literal('').transform(() => null)),
+  // Billing / ops settings
   taxServiceCharge: z.boolean().optional(),
   taxDeliveryFee: z.boolean().optional(),
   allowPartialPayments: z.boolean().optional(),
-  autoReleaseTableOnPayment: z.boolean().optional(),
-  useCleaningStatus: z.boolean().optional(),
   serviceChargeValue: z.coerce.number().min(0).optional(),
   serviceChargeType: z.enum(['PERCENT', 'FIXED']).optional(),
   deliveryFeeDefault: z.coerce.number().min(0).optional(),
+  currencyCode: z
+    .string()
+    .trim()
+    .min(3)
+    .max(3)
+    .transform((v) => v.toUpperCase())
+    .optional(),
+  timezone: z.string().trim().min(1).max(64).optional(),
   receiptFooter: z.string().trim().max(500).optional().nullable(),
+  tableCleaningMinutes: z.coerce.number().int().min(1).max(60).optional(),
+  autoReadyOnEstimate: z.boolean().optional(),
+  autoReleaseTableOnPayment: z.boolean().optional(),
+  useCleaningStatus: z.boolean().optional(),
 });
 
 module.exports = {
@@ -63,5 +99,6 @@ module.exports = {
   settlementBody,
   discountBody,
   methodUpdate,
+  methodCreate,
   settingsUpdate,
 };

@@ -19,6 +19,14 @@ io.on('connection', (socket) => {
   socket.on('join_kitchen', () => {
     socket.join('kitchen');
   });
+  socket.on('join_kitchen_station', (stationId) => {
+    if (!stationId || typeof stationId !== 'string') return;
+    // Leave previous station rooms for this socket (simple single-station focus)
+    for (const room of socket.rooms) {
+      if (room.startsWith('kitchen:station:')) socket.leave(room);
+    }
+    socket.join(`kitchen:station:${stationId}`);
+  });
   socket.on('join_pos', () => {
     socket.join('pos');
   });
@@ -30,6 +38,8 @@ async function start() {
     server.listen(env.port, () => {
       // eslint-disable-next-line no-console
       console.log(`API listening on http://localhost:${env.port}`);
+      const { startOpsWorker } = require('./workers/opsWorker');
+      startOpsWorker(app);
     });
   } catch (err) {
     // eslint-disable-next-line no-console

@@ -1,6 +1,12 @@
+/**
+ * Production / core bootstrap seed.
+ * Creates auth, restaurant shell, Cash payment method, units, and kitchen stations.
+ * Does NOT load demo menu, inventory, tables, or sample expense categories.
+ *
+ * Optional demo catalog: npm run db:seed:demo  (or SEED_DEMO=1 npm run db:seed)
+ */
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcrypt');
-const { seedCleanMenu } = require('./seedMenu');
 
 const prisma = new PrismaClient();
 
@@ -14,9 +20,6 @@ const PERMISSIONS = [
   { code: 'orders.update', description: 'Update orders' },
   { code: 'orders.cancel', description: 'Cancel orders' },
   { code: 'orders.split', description: 'Split order items into another bill' },
-  { code: 'tables.view', description: 'View tables' },
-  { code: 'tables.manage', description: 'Manage tables' },
-  { code: 'sessions.manage', description: 'Manage table sessions' },
   { code: 'kitchen.view', description: 'View kitchen tickets' },
   { code: 'kitchen.update', description: 'Update kitchen ticket status' },
   { code: 'kitchen.manage', description: 'Manage kitchen display settings and history' },
@@ -43,6 +46,9 @@ const PERMISSIONS = [
   { code: 'reports.financial', description: 'View financial reports' },
   { code: 'settings.manage', description: 'Manage restaurant settings' },
   { code: 'pos.access', description: 'Access POS terminal' },
+  { code: 'tables.view', description: 'View dining tables' },
+  { code: 'tables.manage', description: 'Manage dining tables' },
+  { code: 'sessions.manage', description: 'Open and close table sessions' },
 ];
 
 const ROLE_PERMISSIONS = {
@@ -50,7 +56,6 @@ const ROLE_PERMISSIONS = {
   MANAGER: [
     'menu.view', 'menu.create', 'menu.update',
     'orders.view', 'orders.create', 'orders.update', 'orders.cancel', 'orders.split',
-    'tables.view', 'tables.manage', 'sessions.manage',
     'kitchen.view', 'kitchen.update', 'kitchen.manage',
     'payments.create', 'payments.refund', 'payments.approve_refund', 'payments.view', 'payments.manage_methods',
     'billing.view', 'billing.discount', 'billing.complimentary', 'billing.write_off',
@@ -59,24 +64,25 @@ const ROLE_PERMISSIONS = {
     'customers.view', 'customers.manage',
     'employees.manage', 'shifts.manage',
     'expenses.manage', 'reports.view', 'reports.financial', 'settings.manage', 'pos.access',
+    'tables.view', 'tables.manage', 'sessions.manage',
   ],
   CASHIER: [
     'menu.view',
     'orders.view', 'orders.create', 'orders.update', 'orders.split',
-    'tables.view', 'sessions.manage',
     'payments.create', 'payments.view', 'payments.refund',
     'billing.view', 'billing.discount',
     'customers.view', 'customers.manage',
     'shifts.manage',
     'pos.access',
+    'tables.view', 'sessions.manage',
   ],
   WAITER: [
     'menu.view',
     'orders.view', 'orders.create', 'orders.update',
-    'tables.view', 'tables.manage', 'sessions.manage',
     'kitchen.view',
     'customers.view',
     'pos.access',
+    'tables.view', 'sessions.manage',
   ],
   CHEF: [
     'kitchen.view', 'kitchen.update', 'kitchen.manage',
@@ -91,49 +97,24 @@ const ROLE_PERMISSIONS = {
   ],
 };
 
-const PAYMENT_METHODS = [
-  { code: 'CASH', name: 'Cash', isCash: true, sortOrder: 1, taxRate: 14 },
-  { code: 'CARD', name: 'Debit/Credit Card', isCash: false, sortOrder: 2, taxRate: 8 },
-  { code: 'BANK_TRANSFER', name: 'Bank Transfer', isCash: false, sortOrder: 3, taxRate: 8 },
-  { code: 'EASYPAISA', name: 'Easypaisa', isCash: false, sortOrder: 4, taxRate: 8 },
-  { code: 'JAZZCASH', name: 'JazzCash', isCash: false, sortOrder: 5, taxRate: 8 },
-];
-
+/** Core operational units — measurement system, not demo catalog */
 const UNITS = [
-  { code: 'KG', name: 'Kilograms (kg)' },
-  { code: 'G', name: 'Grams (g)' },
-  { code: 'L', name: 'Litres (litre)' },
-  { code: 'ML', name: 'Millilitres (ml)' },
-  { code: 'PCS', name: 'Pieces (piece)' },
-  { code: 'PKT', name: 'Packets (packet)' },
-  { code: 'BOX', name: 'Boxes (box)' },
+  { code: 'KG', name: 'Kilograms (kg)', dimension: 'MASS', toBaseFactor: 1000 },
+  { code: 'G', name: 'Grams (g)', dimension: 'MASS', toBaseFactor: 1 },
+  { code: 'L', name: 'Litres (litre)', dimension: 'VOLUME', toBaseFactor: 1000 },
+  { code: 'ML', name: 'Millilitres (ml)', dimension: 'VOLUME', toBaseFactor: 1 },
+  { code: 'PCS', name: 'Pieces (piece)', dimension: 'COUNT', toBaseFactor: 1 },
+  { code: 'PKT', name: 'Packets (packet)', dimension: 'COUNT', toBaseFactor: 1 },
+  { code: 'BOX', name: 'Boxes (box)', dimension: 'COUNT', toBaseFactor: 1 },
 ];
 
-const INVENTORY_CATEGORIES = [
-  { name: 'Meat & Poultry', description: 'Meat and poultry ingredients' },
-  { name: 'Vegetables', description: 'Fresh and prepared vegetables' },
-  { name: 'Dairy Products', description: 'Milk, cheese and dairy' },
-  { name: 'Beverages', description: 'Drink ingredients and bottles' },
-  { name: 'Spices & Sauces', description: 'Spices, sauces and condiments' },
-  { name: 'Packaging', description: 'Boxes, bags and packaging' },
-];
-
+/** Core kitchen stations — empty menu until admin adds items */
 const STATIONS = [
   { code: 'GRILL', name: 'Grill' },
   { code: 'PIZZA', name: 'Pizza' },
   { code: 'FRYER', name: 'Fryer' },
   { code: 'DRINKS', name: 'Drinks' },
   { code: 'GENERAL', name: 'General kitchen' },
-];
-
-const EXPENSE_CATEGORIES = [
-  'Rent',
-  'Electricity',
-  'Gas',
-  'Salaries',
-  'Maintenance',
-  'Cleaning',
-  'Other expenses',
 ];
 
 async function upsertPermission(p) {
@@ -152,8 +133,8 @@ async function upsertRole(name, description) {
   });
 }
 
-async function main() {
-  console.log('Seeding database...');
+async function seedCore() {
+  console.log('Seeding core (auth, restaurant shell, units, stations)...');
 
   for (const p of PERMISSIONS) {
     await upsertPermission(p);
@@ -221,22 +202,22 @@ async function main() {
   if (!restaurant) {
     restaurant = await prisma.restaurant.create({
       data: {
-        name: 'Demo Restaurant',
-        address: '123 Main Street, Karachi',
-        phone: '+92-300-0000000',
-        email: 'info@demorestaurant.local',
+        name: 'My Restaurant',
+        address: null,
+        phone: null,
+        email: null,
         settings: {
           create: {
-            taxRate: 5,
+            taxRate: 0,
             serviceChargeType: 'PERCENT',
             serviceChargeValue: 0,
-            deliveryFeeDefault: 100,
+            deliveryFeeDefault: 0,
             currencyCode: 'PKR',
             timezone: 'Asia/Karachi',
-            receiptFooter: 'Thank you for dining with us!',
+            receiptFooter: null,
             allowPartialPayments: true,
-            autoReleaseTableOnPayment: true,
-            useCleaningStatus: false,
+            autoReleaseTableOnPayment: false,
+            tableCleaningMinutes: 2,
           },
         },
       },
@@ -247,56 +228,50 @@ async function main() {
       update: {},
       create: {
         restaurantId: restaurant.id,
-        taxRate: 5,
+        taxRate: 0,
         serviceChargeType: 'PERCENT',
         serviceChargeValue: 0,
-        deliveryFeeDefault: 100,
+        deliveryFeeDefault: 0,
         currencyCode: 'PKR',
         timezone: 'Asia/Karachi',
-        receiptFooter: 'Thank you for dining with us!',
+        receiptFooter: null,
         allowPartialPayments: true,
-        autoReleaseTableOnPayment: true,
-        useCleaningStatus: false,
+        autoReleaseTableOnPayment: false,
+        tableCleaningMinutes: 2,
       },
     });
   }
 
-  for (const method of PAYMENT_METHODS) {
-    await prisma.paymentMethod.upsert({
-      where: { code: method.code },
-      update: {
-        name: method.name,
-        isCash: method.isCash,
-        sortOrder: method.sortOrder,
-        taxRate: method.taxRate,
-        isActive: true,
-      },
-      create: method,
-    });
-  }
+  // Cash is required by billing (cannot be deleted); other methods via Settings or demo seed
+  await prisma.paymentMethod.upsert({
+    where: { code: 'CASH' },
+    update: {
+      name: 'Cash',
+      isCash: true,
+      sortOrder: 1,
+      isActive: true,
+      deletedAt: null,
+    },
+    create: {
+      code: 'CASH',
+      name: 'Cash',
+      isCash: true,
+      sortOrder: 1,
+      taxRate: 0,
+      isActive: true,
+    },
+  });
 
   for (const unit of UNITS) {
     await prisma.unit.upsert({
       where: { code: unit.code },
-      update: { name: unit.name },
+      update: {
+        name: unit.name,
+        dimension: unit.dimension,
+        toBaseFactor: unit.toBaseFactor,
+      },
       create: unit,
     });
-  }
-
-  for (const cat of INVENTORY_CATEGORIES) {
-    const existing = await prisma.inventoryCategory.findFirst({
-      where: { name: { equals: cat.name, mode: 'insensitive' }, deletedAt: null },
-    });
-    if (existing) {
-      await prisma.inventoryCategory.update({
-        where: { id: existing.id },
-        data: { description: cat.description, isActive: true },
-      });
-    } else {
-      await prisma.inventoryCategory.create({
-        data: { name: cat.name, description: cat.description, isActive: true },
-      });
-    }
   }
 
   for (const station of STATIONS) {
@@ -307,53 +282,18 @@ async function main() {
     });
   }
 
-  // Clean restaurant menu (categories, products, variants, modifiers, local images).
-  // Soft-archives timestamp/test leftovers; never hard-deletes historical order refs.
-  await seedCleanMenu(prisma);
+  console.log('Core seed complete.');
+  console.log('Admin login → username: admin / password: Admin@123 (change after first login)');
+  console.log('Optional demo catalog: npm run db:seed:demo');
+  return restaurant;
+}
 
-  for (const name of EXPENSE_CATEGORIES) {
-    await prisma.expenseCategory.upsert({
-      where: { name },
-      update: { isActive: true },
-      create: { name },
-    });
+async function main() {
+  await seedCore();
+  if (process.env.SEED_DEMO === '1') {
+    const { seedDemo } = require('./seedDemo');
+    await seedDemo(prisma);
   }
-
-  const desiredTables = [
-    ...Array.from({ length: 7 }, (_, i) => ({
-      number: `GF-T${i + 1}`,
-      capacity: 4,
-      section: 'Ground Floor',
-    })),
-    ...Array.from({ length: 8 }, (_, i) => ({
-      number: `FF-T${i + 1}`,
-      capacity: 4,
-      section: 'First Floor',
-    })),
-  ];
-  for (const table of desiredTables) {
-    const existing = await prisma.diningTable.findFirst({
-      where: { restaurantId: restaurant.id, number: table.number, deletedAt: null },
-    });
-    if (existing) {
-      await prisma.diningTable.update({
-        where: { id: existing.id },
-        data: { section: table.section, isActive: true },
-      });
-    } else {
-      await prisma.diningTable.create({
-        data: {
-          restaurantId: restaurant.id,
-          ...table,
-          status: 'AVAILABLE',
-          isActive: true,
-        },
-      });
-    }
-  }
-
-  console.log('Seed complete.');
-  console.log('Admin login → username: admin / password: Admin@123');
 }
 
 main()
@@ -364,3 +304,5 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+
+module.exports = { seedCore, PERMISSIONS, ROLE_PERMISSIONS };

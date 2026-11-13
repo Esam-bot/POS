@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ordersApi } from '../../services/posService';
 import { money } from '../../utils/formatMoney';
 import { useToast } from '../../components/ui/Toast';
+import { useSocket } from '../../hooks/useSocket';
 import Badge from '../../components/ui/Badge';
 
 export default function POSOrdersPage() {
@@ -22,48 +23,66 @@ export default function POSOrdersPage() {
     load();
   }, [load]);
 
+  useSocket(
+    'pos',
+    ['order.status.updated', 'order.ready', 'order.updated', 'order.created', 'payment.created', '__connected'],
+    () => {
+      load();
+    },
+    true
+  );
+
   return (
-    <div className="space-y-4 p-4 text-white">
+    <div className="space-y-4 p-4 text-[var(--color-ink)]">
       <h1 className="font-[family-name:var(--font-display)] text-2xl font-semibold tracking-tight">
         Active orders
       </h1>
-      <div className="overflow-hidden rounded-xl bg-white/5">
-        <table className="min-w-full text-left text-sm">
-          <thead className="text-white/50">
+      <div className="app-table-wrap">
+        <table className="app-table">
+          <thead>
             <tr>
-              <th className="px-4 py-3">Order</th>
-              <th className="px-4 py-3">Customer</th>
-              <th className="px-4 py-3">Type</th>
-              <th className="px-4 py-3">Table</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Total</th>
+              <th>Order</th>
+              <th>Customer</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Payment</th>
+              <th>Total</th>
             </tr>
           </thead>
           <tbody>
             {orders.map((order) => (
-              <tr key={order.id} className="border-t border-white/10">
-                <td className="px-4 py-3">
-                  <Link className="font-medium text-emerald-300 hover:underline" to={`/pos/orders/${order.id}`}>
+              <tr key={order.id}>
+                <td>
+                  <Link
+                    className="font-medium text-[var(--color-brand)] hover:underline"
+                    to={`/pos/orders/${order.id}`}
+                  >
                     {order.orderNumber}
                   </Link>
                 </td>
-                <td className="px-4 py-3">
+                <td>
                   <p className="font-medium">{order.customerName || '—'}</p>
                   {order.customerPhone && (
-                    <p className="text-xs text-white/50">{order.customerPhone}</p>
+                    <p className="text-xs text-[var(--color-ink-muted)]">{order.customerPhone}</p>
                   )}
                 </td>
-                <td className="px-4 py-3">{order.type}</td>
-                <td className="px-4 py-3">{order.diningTable?.number || '—'}</td>
-                <td className="px-4 py-3">
-                  <Badge tone="brand">{order.status}</Badge>
+                <td>{order.type}</td>
+                <td>
+                  <Badge tone={order.status === 'READY' ? 'success' : 'brand'}>
+                    {String(order.status || '').replaceAll('_', ' ') || '—'}
+                  </Badge>
                 </td>
-                <td className="px-4 py-3">{money(order.grandTotal)}</td>
+                <td>
+                  <Badge tone="warning">
+                    {String(order.paymentStatus || '').replaceAll('_', ' ') || '—'}
+                  </Badge>
+                </td>
+                <td>{money(order.grandTotal)}</td>
               </tr>
             ))}
             {!orders.length && (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-white/50">
+                <td colSpan={6} className="text-[var(--color-ink-muted)]">
                   No active orders.
                 </td>
               </tr>

@@ -5,7 +5,6 @@ const { hashPayload } = require('../../utils/moneyMath');
 const billing = require('../billing/billing.service');
 const { D, money2 } = billing;
 const { lockOrder, refreshSettlement } = require('./payments.service');
-const sessionsService = require('../sessions/sessions.service');
 
 const refundInclude = {
   payment: { include: { method: true } },
@@ -177,24 +176,12 @@ async function createRefund(paymentId, body, userId, canApprove) {
         },
       });
 
-      const order = await tx.order.findUnique({
-        where: { id: payment.orderId },
-        select: { tableSessionId: true },
-      });
-      let autoRelease = { released: false };
-      if (order?.tableSessionId) {
-        autoRelease = await sessionsService.tryAutoRelease(tx, order.tableSessionId, {
-          userId,
-        });
-      }
-
-      return { refund: created, autoRelease };
+      return { refund: created };
     });
 
     return serializeDecimals({
       refund: refund.refund,
       replayed: false,
-      autoRelease: refund.autoRelease || { released: false },
     });
   } catch (err) {
     if (err.code === 'P2002') {
@@ -209,7 +196,6 @@ async function createRefund(paymentId, body, userId, canApprove) {
         return serializeDecimals({
           refund: again,
           replayed: true,
-          autoRelease: { released: false },
         });
       }
     }

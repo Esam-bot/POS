@@ -84,6 +84,7 @@ async function buildPricedLines(tx, itemInputs) {
     const lineUnit = unitPrice.plus(modifierTotal);
     const lineTotal = lineUnit.times(quantity).toDecimalPlaces(2);
 
+    const prepMins = Number(menuItem.prepTimeMinutes ?? 5);
     lines.push({
       menuItemId: menuItem.id,
       variantId,
@@ -95,6 +96,7 @@ async function buildPricedLines(tx, itemInputs) {
       quantity,
       lineTotal,
       specialInstructions: input.specialInstructions || null,
+      prepTimeMinutesSnapshot: Number.isFinite(prepMins) && prepMins >= 0 ? Math.floor(prepMins) : 5,
       modifiers: modifierRows,
     });
   }

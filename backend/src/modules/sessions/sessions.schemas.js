@@ -1,8 +1,8 @@
 const { z } = require('zod');
 
 const openSession = z.object({
-  tableIds: z.array(z.string().uuid()).min(1),
-  guestCount: z.coerce.number().int().positive().optional().nullable(),
+  tableIds: z.array(z.string().uuid()).min(1).max(10),
+  guestCount: z.coerce.number().int().positive().max(100).optional().nullable(),
   notes: z.string().trim().max(500).optional().nullable(),
 });
 

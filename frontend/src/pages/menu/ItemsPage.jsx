@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Pencil, Plus } from 'lucide-react';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { menuApi, imageSrc, MENU_IMAGE_FALLBACK } from '../../services/menuService';
 import { money } from '../../utils/formatMoney';
 import { useAuth } from '../../context/AuthContext';
@@ -8,6 +8,7 @@ import { useToast } from '../../components/ui/Toast';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
+import ConfirmDeleteModal from '../../components/ui/ConfirmDeleteModal';
 import { Field, TextInput, TextArea, Select } from '../../components/ui/Input';
 
 const emptyItem = {
@@ -17,6 +18,7 @@ const emptyItem = {
   categoryId: '',
   kitchenStationId: '',
   basePrice: '',
+  prepTimeMinutes: 5,
   imageUrl: '',
   trackInventory: false,
   isAvailable: true,
@@ -46,6 +48,8 @@ export default function ItemsPage() {
   const [variantDraft, setVariantDraft] = useState({ name: '', price: '', sku: '' });
   const [assignedGroups, setAssignedGroups] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const loadLookups = useCallback(async () => {
     const [cats, stns, mods] = await Promise.all([
@@ -106,6 +110,7 @@ export default function ItemsPage() {
         categoryId: item.categoryId,
         kitchenStationId: item.kitchenStationId || '',
         basePrice: item.basePrice,
+        prepTimeMinutes: item.prepTimeMinutes ?? 5,
         imageUrl: item.imageUrl || '',
         trackInventory: item.trackInventory,
         isAvailable: item.isAvailable,
@@ -148,6 +153,7 @@ export default function ItemsPage() {
         categoryId: form.categoryId,
         kitchenStationId: form.kitchenStationId || null,
         basePrice: Number(form.basePrice),
+        prepTimeMinutes: Number(form.prepTimeMinutes) || 5,
         imageUrl: form.imageUrl || null,
         trackInventory: form.trackInventory,
         isAvailable: form.isAvailable,
@@ -236,13 +242,18 @@ export default function ItemsPage() {
     }
   }
 
-  async function archive(row) {
+  async function confirmDelete() {
+    if (!deleting) return;
+    setDeleteBusy(true);
     try {
-      await menuApi.archiveItem(row.id, true);
-      toast.success('Item archived');
+      await menuApi.archiveItem(deleting.id, true);
+      toast.success('Product deleted');
+      setDeleting(null);
       loadItems();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Archive failed');
+      toast.error(err.response?.data?.message || 'Delete failed');
+    } finally {
+      setDeleteBusy(false);
     }
   }
 
@@ -382,8 +393,9 @@ export default function ItemsPage() {
                       </>
                     )}
                     {hasPermission('menu.delete') && (
-                      <Button variant="ghost" onClick={() => archive(row)}>
-                        Archive
+                      <Button variant="danger" onClick={() => setDeleting(row)}>
+                        <Trash2 size={14} />
+                        Delete
                       </Button>
                     )}
                   </div>
@@ -463,7 +475,7 @@ export default function ItemsPage() {
             <h3 className="text-sm font-semibold uppercase tracking-wide text-[var(--color-ink-muted)]">
               Pricing & settings
             </h3>
-            <Field label="Base price (Rs.)">
+            <Field label="Base price">
               <TextInput
                 type="number"
                 min="0"
@@ -471,6 +483,16 @@ export default function ItemsPage() {
                 required
                 value={form.basePrice}
                 onChange={(e) => setForm({ ...form, basePrice: e.target.value })}
+              />
+            </Field>
+            <Field label="Prep time (minutes)" hint="Used for auto READY after submit">
+              <TextInput
+                type="number"
+                min="0"
+                max="240"
+                required
+                value={form.prepTimeMinutes}
+                onChange={(e) => setForm({ ...form, prepTimeMinutes: e.target.value })}
               />
             </Field>
             <div className="flex flex-wrap gap-4 text-sm">
@@ -604,6 +626,16 @@ export default function ItemsPage() {
           </div>
         </form>
       </Modal>
+
+      <ConfirmDeleteModal
+        open={Boolean(deleting)}
+        title="Delete product"
+        itemName={deleting?.name}
+        message="It will be removed from the menu (order history is kept)."
+        loading={deleteBusy}
+        onConfirm={confirmDelete}
+        onClose={() => !deleteBusy && setDeleting(null)}
+      />
     </div>
   );
 }

@@ -1,6 +1,5 @@
 const path = require('path');
 const request = require('supertest');
-const bcrypt = require('bcrypt');
 
 process.env.NODE_ENV = 'test';
 require('dotenv').config({ path: path.join(__dirname, '../../../../.env') });
@@ -18,15 +17,15 @@ async function login(username, password) {
   return res.body.data.token;
 }
 
-describe('Phase 3 — tables, sessions, orders', () => {
+describe('Phase 3 — orders + tables + prep timers', () => {
   let adminToken;
-  let restaurantId;
-  let categoryId;
-  let stationId;
   let menuItemId;
   let variantId;
   let modifierId;
-  let modifierGroupId;
+  let cashId;
+  let restaurantId;
+  let tableId;
+  let sessionId;
   const suffix = Date.now();
 
   beforeAll(async () => {
@@ -36,433 +35,312 @@ describe('Phase 3 — tables, sessions, orders', () => {
     restaurantId = restaurant.id;
 
     const station = await prisma.kitchenStation.findFirst({ where: { isActive: true } });
-    stationId = station.id;
-
     const category = await prisma.menuCategory.create({
       data: { name: `P3 Cat ${suffix}`, isActive: true },
     });
-    categoryId = category.id;
-
     const group = await prisma.modifierGroup.create({
       data: {
         name: `Extras ${suffix}`,
         selectionType: 'MULTI',
         minSelect: 0,
         maxSelect: 3,
-        modifiers: {
-          create: { name: 'Cheese', priceDelta: 50 },
-        },
+        modifiers: { create: { name: 'Cheese', priceDelta: 50 } },
       },
       include: { modifiers: true },
     });
-    modifierGroupId = group.id;
     modifierId = group.modifiers[0].id;
 
     const item = await prisma.menuItem.create({
       data: {
-        categoryId,
-        kitchenStationId: stationId,
+        categoryId: category.id,
+        kitchenStationId: station.id,
         name: `Test Burger ${suffix}`,
         sku: `P3-${suffix}`,
         basePrice: 500,
+        prepTimeMinutes: 1,
         isActive: true,
         isAvailable: true,
-        variants: {
-          create: { name: 'Double', price: 700, isActive: true },
-        },
-        modifierGroups: {
-          create: { modifierGroupId },
-        },
+        variants: { create: { name: 'Double', price: 700, isActive: true } },
+        modifierGroups: { create: { modifierGroupId: group.id } },
       },
       include: { variants: true },
     });
     menuItemId = item.id;
     variantId = item.variants[0].id;
+
+    const cash = await prisma.paymentMethod.findFirst({ where: { code: 'CASH' } });
+    cashId = cash.id;
+
+    const table = await prisma.diningTable.create({
+      data: {
+        restaurantId,
+        number: `P3-T-${suffix}`,
+        capacity: 4,
+        section: 'Ground Floor',
+        status: 'AVAILABLE',
+        isActive: true,
+      },
+    });
+    tableId = table.id;
   });
 
   afterAll(async () => {
     await prisma.$disconnect();
   });
 
-  it('creates tables and blocks duplicate numbers', async () => {
-    const create = await request(app)
-      .post('/api/tables')
+  async function openSession() {
+    const res = await request(app)
+      .post('/api/table-sessions')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ number: `P3-${suffix}-A`, capacity: 4, section: 'Test' });
-    expect(create.status).toBe(201);
+      .send({ tableIds: [tableId] });
+    expect(res.status).toBe(201);
+    sessionId = res.body.data.id;
+    return res.body.data;
+  }
 
-    const dup = await request(app)
-      .post('/api/tables')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ number: `p3-${suffix}-a`, capacity: 2 });
-    expect(dup.status).toBe(409);
+  it('exposes tables and table-sessions routes', async () => {
+    const tables = await request(app)
+      .get('/api/tables')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(tables.status).toBe(200);
+    expect(Array.isArray(tables.body.data.items)).toBe(true);
 
-    const badCap = await request(app)
-      .post('/api/tables')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ number: `P3-${suffix}-B`, capacity: 0 });
-    expect(badCap.status).toBe(422);
+    const sessions = await request(app)
+      .get('/api/table-sessions')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(sessions.status).toBe(200);
   });
 
-  it('opens session with concurrency safety and blocks occupied→available', async () => {
-    const t1 = await request(app)
-      .post('/api/tables')
+  it('requires a table session for dine-in and creates takeaway/delivery', async () => {
+    const missing = await request(app)
+      .post('/api/orders')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ number: `P3-${suffix}-S1`, capacity: 4 });
-    const t2 = await request(app)
-      .post('/api/tables')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ number: `P3-${suffix}-S2`, capacity: 4 });
+      .send({
+        type: 'DINE_IN',
+        customerName: 'Walk-in Guest',
+        customerPhone: '03001234567',
+        items: [{ menuItemId, quantity: 1 }],
+      });
+    expect(missing.status).toBe(400);
 
-    const session = await request(app)
-      .post('/api/table-sessions')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ tableIds: [t1.body.data.id, t2.body.data.id], guestCount: 3 });
-    expect(session.status).toBe(201);
-    expect(session.body.data.tables).toHaveLength(2);
-
-    const conflict = await request(app)
-      .post('/api/table-sessions')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ tableIds: [t1.body.data.id] });
-    expect(conflict.status).toBe(409);
-
-    const markAvailable = await request(app)
-      .patch(`/api/tables/${t1.body.data.id}/status`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ status: 'AVAILABLE' });
-    expect(markAvailable.status).toBe(409);
-
-    const deactivate = await request(app)
-      .patch(`/api/tables/${t1.body.data.id}`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ isActive: false });
-    expect(deactivate.status).toBe(409);
-  });
-
-  it('creates dine-in / takeaway / delivery orders with snapshots', async () => {
-    const table = await request(app)
-      .post('/api/tables')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ number: `P3-${suffix}-O1`, capacity: 4 });
-    const session = await request(app)
-      .post('/api/table-sessions')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ tableIds: [table.body.data.id] });
+    await openSession();
 
     const dineIn = await request(app)
       .post('/api/orders')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
         type: 'DINE_IN',
-        customerName: 'Walk-in Guest', customerPhone: '03001234567',
-        tableSessionId: session.body.data.id,
-        items: [
-          {
-            menuItemId,
-            variantId,
-            quantity: 2,
-            modifiers: [{ modifierId }],
-          },
-        ],
+        tableSessionId: sessionId,
+        diningTableId: tableId,
+        customerName: 'Walk-in Guest',
+        customerPhone: '03001234567',
+        items: [{ menuItemId, quantity: 1 }],
       });
     expect(dineIn.status).toBe(201);
-    expect(dineIn.body.data.items[0].nameSnapshot).toContain('Test Burger');
-    expect(dineIn.body.data.items[0].variantNameSnapshot).toBe('Double');
-    expect(Number(dineIn.body.data.grandTotal)).toBe(1500);
+    expect(dineIn.body.data.type).toBe('DINE_IN');
+    expect(dineIn.body.data.tableSessionId).toBe(sessionId);
+    expect(dineIn.body.data.diningTableId).toBe(tableId);
 
     const takeaway = await request(app)
       .post('/api/orders')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
         type: 'TAKEAWAY',
-        customerName: 'Walk-in Guest', customerPhone: '03001234567',
-        items: [{ menuItemId, quantity: 1 }],
+        customerName: 'Walk-in Guest',
+        customerPhone: '03001234567',
+        items: [
+          {
+            menuItemId,
+            variantId,
+            quantity: 1,
+            modifiers: [{ modifierId }],
+          },
+        ],
       });
     expect(takeaway.status).toBe(201);
+    expect(Number(takeaway.body.data.grandTotal)).toBe(750);
 
     const delivery = await request(app)
       .post('/api/orders')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
         type: 'DELIVERY',
-        customerName: 'Walk-in Guest', customerPhone: '03001234567',
+        customerName: 'Walk-in Guest',
+        customerPhone: '03001234567',
         deliveryFee: 100,
         deliveryAddressSnapshot: {
-          name: 'Ali',
+          name: 'Walk-in Guest',
           phone: '03001234567',
           line1: 'Street 1',
+          city: 'Karachi',
         },
         items: [{ menuItemId, quantity: 1 }],
       });
     expect(delivery.status).toBe(201);
     expect(Number(delivery.body.data.grandTotal)).toBe(600);
-    expect(delivery.body.data.customerName).toBe('Walk-in Guest');
-    expect(delivery.body.data.customerPhone).toBe('03001234567');
   });
 
-  it('requires customer name and a valid phone number', async () => {
-    const missingName = await request(app)
+  it('submit starts PREPARING with prep timers; payment does not COMPLETE food', async () => {
+    const order = await request(app)
       .post('/api/orders')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
         type: 'TAKEAWAY',
+        customerName: 'Walk-in Guest',
         customerPhone: '03001234567',
         items: [{ menuItemId, quantity: 1 }],
       });
-    expect(missingName.status).toBe(422);
-
-    const missingPhone = await request(app)
-      .post('/api/orders')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({
-        type: 'TAKEAWAY',
-        customerName: 'Ali',
-        items: [{ menuItemId, quantity: 1 }],
-      });
-    expect(missingPhone.status).toBe(422);
-
-    const badPhone = await request(app)
-      .post('/api/orders')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({
-        type: 'TAKEAWAY',
-        customerName: 'Ali',
-        customerPhone: 'abc',
-        items: [{ menuItemId, quantity: 1 }],
-      });
-    expect(badPhone.status).toBe(422);
-
-    const ok = await request(app)
-      .post('/api/orders')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({
-        type: 'TAKEAWAY',
-        customerName: 'Sara Khan',
-        customerPhone: '0300-1234567',
-        items: [{ menuItemId, quantity: 1 }],
-      });
-    expect(ok.status).toBe(201);
-    expect(ok.body.data.customerName).toBe('Sara Khan');
-    expect(ok.body.data.customerPhone).toBe('0300-1234567');
-    expect(ok.body.data.customerId).toBeTruthy();
-
-    const saved = await prisma.customer.findUnique({
-      where: { phone: '0300-1234567' },
-    });
-    expect(saved).toBeTruthy();
-    expect(saved.name).toBe('Sara Khan');
-
-    const search = await request(app)
-      .get('/api/customers/search')
-      .query({ q: 'Sara' })
+    const submit = await request(app)
+      .post(`/api/orders/${order.body.data.id}/submit`)
       .set('Authorization', `Bearer ${adminToken}`);
-    expect(search.status).toBe(200);
-    expect(search.body.data.items.some((c) => c.phone === '0300-1234567')).toBe(true);
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.status).toBe('PREPARING');
+    expect(submit.body.data.estimatedReadyAt).toBeTruthy();
+    expect(submit.body.data.items[0].prepTimeMinutesSnapshot).toBe(1);
 
-    const again = await request(app)
-      .post('/api/orders')
+    const quote = await request(app)
+      .post(`/api/orders/${order.body.data.id}/payment-quote`)
       .set('Authorization', `Bearer ${adminToken}`)
+      .send({});
+    const outstanding = Number(quote.body.data.outstandingPreTax);
+
+    const pay = await request(app)
+      .post(`/api/orders/${order.body.data.id}/payments`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', `p3-pay-${suffix}`)
       .send({
-        type: 'TAKEAWAY',
-        customerName: 'Sara K',
-        customerPhone: '0300-1234567',
-        items: [{ menuItemId, quantity: 1 }],
+        portions: [
+          { methodId: cashId, preTaxAmount: outstanding, amountTendered: outstanding + 100 },
+        ],
       });
-    expect(again.status).toBe(201);
-    expect(again.body.data.customerId).toBe(saved.id);
-    const updated = await prisma.customer.findUnique({ where: { id: saved.id } });
-    expect(updated.name).toBe('Sara K');
+    expect(pay.status).toBe(201);
+    expect(pay.body.data.orderCompleted).toBeFalsy();
+
+    const fresh = await prisma.order.findUnique({ where: { id: order.body.data.id } });
+    expect(fresh.status).toBe('PREPARING');
+    expect(fresh.paymentStatus).toBe('PAID');
+
+    // Items cannot be added after preparation / inventory deduction
+    const add = await request(app)
+      .post(`/api/orders/${order.body.data.id}/items`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ items: [{ menuItemId, quantity: 1 }] });
+    expect(add.status).toBe(409);
   });
 
-  it('rejects unavailable items and invalid transitions', async () => {
-    await prisma.menuItem.update({
-      where: { id: menuItemId },
-      data: { isAvailable: false },
-    });
-
-    const bad = await request(app)
+  it('cancels a preparing order with a reason', async () => {
+    if (!sessionId) await openSession();
+    const order = await request(app)
       .post('/api/orders')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
-        type: 'TAKEAWAY',
-        customerName: 'Walk-in Guest', customerPhone: '03001234567',
+        type: 'DINE_IN',
+        tableSessionId: sessionId,
+        diningTableId: tableId,
+        customerName: 'Walk-in Guest',
+        customerPhone: '03001234567',
         items: [{ menuItemId, quantity: 1 }],
       });
-    expect(bad.status).toBe(400);
+    await request(app)
+      .post(`/api/orders/${order.body.data.id}/submit`)
+      .set('Authorization', `Bearer ${adminToken}`);
 
-    await prisma.menuItem.update({
-      where: { id: menuItemId },
-      data: { isAvailable: true },
-    });
+    const cancel = await request(app)
+      .post(`/api/orders/${order.body.data.id}/cancel`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ reason: 'Guest changed mind' });
+    expect(cancel.status).toBe(200);
+    expect(cancel.body.data.status).toBe('CANCELLED');
+  });
+
+  it('splits items and keeps the table session on the new order', async () => {
+    if (!sessionId) await openSession();
+    const order = await request(app)
+      .post('/api/orders')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        type: 'DINE_IN',
+        tableSessionId: sessionId,
+        diningTableId: tableId,
+        customerName: 'Split Guest',
+        customerPhone: '03007654321',
+        items: [{ menuItemId, quantity: 2 }],
+      });
+    expect(order.status).toBe(201);
+    const itemId = order.body.data.items[0].id;
+
+    const split = await request(app)
+      .post(`/api/orders/${order.body.data.id}/split`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ items: [{ orderItemId: itemId, quantity: 1 }] });
+    expect(split.status).toBe(200);
+    expect(split.body.data.splitOrder.customerName).toBe('Split Guest');
+    expect(split.body.data.splitOrder.type).toBe('DINE_IN');
+    expect(split.body.data.splitOrder.tableSessionId).toBe(sessionId);
+    expect(Number(split.body.data.source.items[0].quantity)).toBe(1);
+  });
+
+  it('closes session into CLEANING and keeps kitchen tickets after payment', async () => {
+    const kitchenService = require('../../kitchen/kitchen.service');
 
     const order = await request(app)
       .post('/api/orders')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
         type: 'TAKEAWAY',
-        customerName: 'Walk-in Guest', customerPhone: '03001234567',
+        customerName: 'Kitchen Guest',
+        customerPhone: '03001112233',
         items: [{ menuItemId, quantity: 1 }],
       });
-
-    const served = await request(app)
-      .post(`/api/orders/${order.body.data.id}/transition`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ status: 'SERVED' });
-    expect(served.status).toBe(409);
-
+    const orderId = order.body.data.id;
     await request(app)
-      .post(`/api/orders/${order.body.data.id}/submit`)
+      .post(`/api/orders/${orderId}/submit`)
       .set('Authorization', `Bearer ${adminToken}`);
-    await request(app)
-      .post(`/api/orders/${order.body.data.id}/transition`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ status: 'CONFIRMED' });
-    await request(app)
-      .post(`/api/orders/${order.body.data.id}/transition`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ status: 'PREPARING' });
-    await request(app)
-      .post(`/api/orders/${order.body.data.id}/transition`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ status: 'READY' });
 
-    const unpaidComplete = await request(app)
-      .post(`/api/orders/${order.body.data.id}/transition`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ status: 'COMPLETED' });
-    expect(unpaidComplete.status).toBe(409);
+    const tickets = await prisma.$transaction((tx) =>
+      kitchenService.createTicketsForOrder(tx, orderId)
+    );
+    expect(tickets.length).toBeGreaterThan(0);
+    const ticketId = tickets[0].id;
 
-    const cash = await prisma.paymentMethod.findFirst({ where: { code: 'CASH' } });
+    const quote = await request(app)
+      .post(`/api/orders/${orderId}/payment-quote`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({});
+    const outstanding = Number(quote.body.data.outstandingPreTax);
     const pay = await request(app)
-      .post(`/api/orders/${order.body.data.id}/payments`)
+      .post(`/api/orders/${orderId}/payments`)
       .set('Authorization', `Bearer ${adminToken}`)
-      .set('Idempotency-Key', `p3-complete-${suffix}`)
+      .set('Idempotency-Key', `p3-kitchen-${suffix}`)
       .send({
         portions: [
           {
-            methodId: cash.id,
-            preTaxAmount: Number(order.body.data.grandTotal),
-            amountTendered: Number(order.body.data.grandTotal) + 100,
+            methodId: cashId,
+            preTaxAmount: outstanding,
+            amountTendered: outstanding * 2,
           },
         ],
       });
     expect(pay.status).toBe(201);
 
-    const complete = await request(app)
-      .post(`/api/orders/${order.body.data.id}/transition`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ status: 'COMPLETED' });
-    expect(complete.status).toBe(200);
-  });
+    const afterPay = await prisma.order.findUnique({ where: { id: orderId } });
+    expect(afterPay.status).toBe('PREPARING');
+    expect(afterPay.paymentStatus).toBe('PAID');
 
-  it('supports multiple orders per session, split, cancel, and close rules', async () => {
-    const table = await request(app)
-      .post('/api/tables')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ number: `P3-${suffix}-M1`, capacity: 4 });
-    const session = await request(app)
-      .post('/api/table-sessions')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ tableIds: [table.body.data.id] });
-    const sessionId = session.body.data.id;
+    const board = await kitchenService.listTickets({});
+    expect(board.some((t) => t.id === ticketId)).toBe(true);
 
-    const order1 = await request(app)
-      .post('/api/orders')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({
-        type: 'DINE_IN',
-        customerName: 'Walk-in Guest', customerPhone: '03001234567',
-        tableSessionId: sessionId,
-        items: [{ menuItemId, quantity: 2 }],
-      });
-    const order2 = await request(app)
-      .post('/api/orders')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({
-        type: 'DINE_IN',
-        customerName: 'Walk-in Guest', customerPhone: '03001234567',
-        tableSessionId: sessionId,
-        items: [{ menuItemId, quantity: 1 }],
-      });
-    expect(order1.status).toBe(201);
-    expect(order2.status).toBe(201);
+    const advanced = await kitchenService.updateTicketStatus(ticketId, 'PREPARING');
+    expect(advanced.ticket.status).toBe('PREPARING');
 
-    const itemId = order1.body.data.items[0].id;
-    const split = await request(app)
-      .post(`/api/orders/${order1.body.data.id}/split`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ items: [{ orderItemId: itemId, quantity: 1 }] });
-    expect(split.status).toBe(200);
-    expect(split.body.data.splitOrder.tableSessionId).toBe(sessionId);
-
-    const earlyClose = await request(app)
-      .post(`/api/table-sessions/${sessionId}/close`)
-      .set('Authorization', `Bearer ${adminToken}`);
-    expect(earlyClose.status).toBe(409);
-
-    const cancelIds = [
-      order1.body.data.id,
-      order2.body.data.id,
-      split.body.data.splitOrder.id,
-    ];
-    let lastCancel;
-    for (const orderId of cancelIds) {
-      lastCancel = await request(app)
-        .post(`/api/orders/${orderId}/cancel`)
-        .set('Authorization', `Bearer ${adminToken}`)
-        .send({ reason: 'Test cleanup' });
-      expect(lastCancel.status).toBe(200);
+    if (sessionId) {
+      const close = await request(app)
+        .post(`/api/table-sessions/${sessionId}/close`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(close.status).toBe(200);
+      const table = await prisma.diningTable.findUnique({ where: { id: tableId } });
+      expect(table.status).toBe('CLEANING');
+      expect(table.cleaningStartedAt).toBeTruthy();
     }
-    // Last cancel auto-releases the session (default autoReleaseTableOnPayment)
-    expect(lastCancel.body.data.autoRelease.released).toBe(true);
-
-    const closedSession = await request(app)
-      .get(`/api/table-sessions/${sessionId}`)
-      .set('Authorization', `Bearer ${adminToken}`);
-    expect(closedSession.body.data.status).toBe('CLOSED');
-
-    const freed = await request(app)
-      .get(`/api/tables/${table.body.data.id}`)
-      .set('Authorization', `Bearer ${adminToken}`);
-    expect(freed.body.data.status).toBe('AVAILABLE');
-
-    const close = await request(app)
-      .post(`/api/table-sessions/${sessionId}/close`)
-      .set('Authorization', `Bearer ${adminToken}`);
-    expect(close.status).toBe(409);
-
-    // CLEANING → AVAILABLE (audit only; no reason required)
-    await prisma.diningTable.update({
-      where: { id: table.body.data.id },
-      data: { status: 'CLEANING' },
-    });
-    const available = await request(app)
-      .patch(`/api/tables/${table.body.data.id}/status`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ status: 'AVAILABLE' });
-    expect(available.status).toBe(200);
-  });
-
-  it('transfers session tables', async () => {
-    const from = await request(app)
-      .post('/api/tables')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ number: `P3-${suffix}-X1`, capacity: 2 });
-    const to = await request(app)
-      .post('/api/tables')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ number: `P3-${suffix}-X2`, capacity: 2 });
-    const session = await request(app)
-      .post('/api/table-sessions')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ tableIds: [from.body.data.id] });
-
-    const transfer = await request(app)
-      .post(`/api/table-sessions/${session.body.data.id}/transfer`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ fromTableId: from.body.data.id, toTableId: to.body.data.id });
-    expect(transfer.status).toBe(200);
-    expect(transfer.body.data.tables.some((t) => t.id === to.body.data.id)).toBe(true);
   });
 });

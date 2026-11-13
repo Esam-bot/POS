@@ -8,6 +8,8 @@ build/
 backend/uploads/*
 !backend/uploads/.gitkeep
 backend/.pgdata/
+# Local JSON dumps from `npm run db:reset-data` — keep on disk, do not commit
+backend/backups/
 coverage/
 .vite/
 *.sqlite

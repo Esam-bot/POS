@@ -85,7 +85,7 @@ describe('Phase 4 — billing, payments, refunds', () => {
       .post(`/api/orders/${create.body.data.id}/submit`)
       .set('Authorization', `Bearer ${adminToken}`);
     expect(submit.status).toBe(200);
-    return create.body.data;
+    return submit.body.data;
   }
 
   it('applies method-based tax rates and ignores order type', async () => {
@@ -105,6 +105,7 @@ describe('Phase 4 — billing, payments, refunds', () => {
               name: 'Test',
               phone: '03001234567',
               line1: 'Street 1',
+              city: 'Test Area',
             },
             items: [{ menuItemId, quantity: 10 }],
           });
@@ -166,6 +167,7 @@ describe('Phase 4 — billing, payments, refunds', () => {
           name: 'Test',
           phone: '03001234567',
           line1: 'Street 1',
+          city: 'Test Area',
         },
         items: [{ menuItemId, quantity: 1 }],
       });
@@ -356,21 +358,13 @@ describe('Phase 4 — billing, payments, refunds', () => {
 
   it('keeps operational completion separate from settlement', async () => {
     const order = await createTakeawayOrder(1);
+    expect(order.status).toBe('PREPARING');
 
-    const completeUnpaid = await request(app)
-      .post(`/api/orders/${order.id}/transition`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ status: 'CONFIRMED' });
-    expect(completeUnpaid.status).toBe(200);
-
-    await request(app)
-      .post(`/api/orders/${order.id}/transition`)
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ status: 'PREPARING' });
-    await request(app)
+    const tryCompleteUnpaid = await request(app)
       .post(`/api/orders/${order.id}/transition`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ status: 'READY' });
+    expect(tryCompleteUnpaid.status).toBe(200);
 
     const tryComplete = await request(app)
       .post(`/api/orders/${order.id}/transition`)
@@ -378,21 +372,29 @@ describe('Phase 4 — billing, payments, refunds', () => {
       .send({ status: 'COMPLETED' });
     expect(tryComplete.status).toBe(409);
 
-    await request(app)
+    const pay = await request(app)
       .post(`/api/orders/${order.id}/payments`)
       .set('Authorization', `Bearer ${adminToken}`)
       .set('Idempotency-Key', key('settle-op'))
       .send({
         portions: [{ methodId: methods.CASH.id, preTaxAmount: 1000, amountTendered: 1200 }],
       });
+    expect(pay.status).toBe(201);
+    expect(pay.body.data.orderCompleted).toBeFalsy();
 
-    const done = await request(app)
+    const afterPay = await request(app)
+      .get(`/api/orders/${order.id}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(afterPay.status).toBe(200);
+    expect(afterPay.body.data.status).toBe('READY');
+    expect(afterPay.body.data.paymentStatus).toBe('PAID');
+
+    const complete = await request(app)
       .post(`/api/orders/${order.id}/transition`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ status: 'COMPLETED' });
-    expect(done.status).toBe(200);
-    expect(done.body.data.status).toBe('COMPLETED');
-    expect(done.body.data.paymentStatus).toBe('PAID');
+    expect(complete.status).toBe(200);
+    expect(complete.body.data.status).toBe('COMPLETED');
   });
 
   it('supports complimentary authorization without tax', async () => {

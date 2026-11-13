@@ -114,154 +114,203 @@ export default function ModifiersPage() {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-[var(--color-ink-muted)]">
-        Customization groups contain options customers can choose while ordering — for example
-        “Burger Extras” with Extra Cheese, Extra Patty, and Extra Sauce. Cashiers see these when
-        they select a product on the POS.
-      </p>
-      <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
-      <aside className="rounded-xl border border-[var(--color-line)] bg-white p-3">
-        <div className="mb-3 flex items-center justify-between">
-          <p className="text-sm font-semibold">Customization groups</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <p className="max-w-3xl text-sm text-[var(--color-ink-muted)]">
+          Customization groups contain options customers can choose while ordering — for example
+          “Burger Extras” with Extra Cheese, Extra Patty, and Extra Sauce. Cashiers see these when
+          they select a product on the POS.
+        </p>
+        {hasPermission('menu.create') && (
+          <Button
+            onClick={() => {
+              setEditingGroup(null);
+              setGroupForm(emptyGroup);
+              setGroupOpen(true);
+            }}
+          >
+            <Plus size={16} />
+            New group
+          </Button>
+        )}
+      </div>
+
+      {groups.length === 0 ? (
+        <div className="flex min-h-[280px] w-full flex-col items-center justify-center rounded-xl border border-dashed border-[var(--color-line)] bg-white px-6 py-12 text-center">
+          <p className="text-lg font-semibold text-[var(--color-ink)]">No customization groups yet</p>
+          <p className="mt-2 max-w-md text-sm text-[var(--color-ink-muted)]">
+            Create a group first (for example “Burger Extras”), then add options cashiers can pick on
+            the POS.
+          </p>
           {hasPermission('menu.create') && (
             <Button
-              variant="secondary"
+              className="mt-5"
               onClick={() => {
                 setEditingGroup(null);
                 setGroupForm(emptyGroup);
                 setGroupOpen(true);
               }}
             >
-              <Plus size={14} />
-              New
+              <Plus size={16} />
+              Create first group
             </Button>
           )}
         </div>
-        <div className="space-y-1">
-          {groups.map((g) => (
-            <button
-              key={g.id}
-              type="button"
-              onClick={() => setSelectedId(g.id)}
-              className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${
-                selectedId === g.id
-                  ? 'bg-[var(--color-brand-soft)] text-[var(--color-brand-dark)]'
-                  : 'hover:bg-[var(--color-surface)]'
-              }`}
-            >
-              <span>{g.name}</span>
-              <Badge tone={g.isActive ? 'success' : 'muted'}>
-                {g.selectionType === 'SINGLE' ? 'One' : 'Many'}
-              </Badge>
-            </button>
-          ))}
-          {groups.length === 0 && (
-            <p className="px-2 py-4 text-sm text-[var(--color-ink-muted)]">No groups yet.</p>
-          )}
-        </div>
-      </aside>
-
-      <section className="rounded-xl border border-[var(--color-line)] bg-white p-5">
-        {!detail ? (
-          <p className="text-[var(--color-ink-muted)]">Select a customization group.</p>
-        ) : (
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="text-xl font-semibold">{detail.name}</h2>
-                <p className="text-sm text-[var(--color-ink-muted)]">{detail.description}</p>
-                <p className="mt-2 text-sm text-[var(--color-ink-muted)]">
-                  {detail.selectionType === 'SINGLE' ? 'Choose one option' : 'Choose multiple options'}
-                  {detail.isRequired ? ' · required' : ' · optional'}
-                </p>
-              </div>
-              {hasPermission('menu.update') && (
+      ) : (
+        <div className="grid w-full gap-4 lg:grid-cols-[minmax(240px,300px)_minmax(0,1fr)]">
+          <aside className="rounded-xl border border-[var(--color-line)] bg-white p-3">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold">Groups</p>
+              {hasPermission('menu.create') && (
                 <Button
                   variant="secondary"
                   onClick={() => {
-                    setEditingGroup(detail);
-                    setGroupForm({
-                      name: detail.name,
-                      description: detail.description || '',
-                      selectionType: detail.selectionType,
-                      minSelect: detail.minSelect,
-                      maxSelect: detail.maxSelect,
-                      isRequired: detail.isRequired,
-                      isActive: detail.isActive,
-                    });
+                    setEditingGroup(null);
+                    setGroupForm(emptyGroup);
                     setGroupOpen(true);
                   }}
                 >
-                  <Pencil size={14} />
-                  Edit group
-                </Button>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold">Customization options</h3>
-              {hasPermission('menu.create') && (
-                <Button
-                  onClick={() => {
-                    setEditingModifier(null);
-                    setModifierForm(emptyModifier);
-                    setModifierOpen(true);
-                  }}
-                >
                   <Plus size={14} />
-                  Add option
+                  New
                 </Button>
               )}
             </div>
+            <div className="max-h-[min(60vh,520px)] space-y-1 overflow-y-auto">
+              {groups.map((g) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => setSelectedId(g.id)}
+                  className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${
+                    selectedId === g.id
+                      ? 'bg-[var(--color-brand-soft)] text-[var(--color-brand-dark)]'
+                      : 'hover:bg-[var(--color-surface)]'
+                  }`}
+                >
+                  <span className="truncate pr-2">{g.name}</span>
+                  <Badge tone={g.isActive ? 'success' : 'muted'}>
+                    {g.selectionType === 'SINGLE' ? 'One' : 'Many'}
+                  </Badge>
+                </button>
+              ))}
+            </div>
+          </aside>
 
-            <table className="min-w-full text-left text-sm">
-              <thead className="text-[var(--color-ink-muted)]">
-                <tr>
-                  <th className="py-2 font-medium">Option</th>
-                  <th className="py-2 font-medium">Extra price</th>
-                  <th className="py-2 font-medium">Status</th>
-                  <th className="py-2 font-medium">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(detail.modifiers || []).map((m) => (
-                  <tr key={m.id} className="border-t border-[var(--color-line)]">
-                    <td className="py-2">{m.name}</td>
-                    <td className="py-2">
-                      {Number(m.priceDelta) === 0 ? 'Free' : `+${money(m.priceDelta)}`}
-                    </td>
-                    <td className="py-2">
-                      <Badge tone={m.isActive ? 'success' : 'muted'}>
-                        {m.isActive ? 'Active' : 'Inactive'}
-                      </Badge>
-                    </td>
-                    <td className="py-2">
-                      {hasPermission('menu.update') && (
-                        <Button
-                          variant="ghost"
-                          onClick={() => {
-                            setEditingModifier(m);
-                            setModifierForm({
-                              name: m.name,
-                              description: m.description || '',
-                              priceDelta: m.priceDelta,
-                              sortOrder: m.sortOrder,
-                              isActive: m.isActive,
-                            });
-                            setModifierOpen(true);
-                          }}
-                        >
-                          Edit
-                        </Button>
+          <section className="min-w-0 rounded-xl border border-[var(--color-line)] bg-white p-5">
+            {!detail ? (
+              <div className="flex min-h-[200px] items-center justify-center text-sm text-[var(--color-ink-muted)]">
+                Select a customization group to manage its options.
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-xl font-semibold">{detail.name}</h2>
+                    <p className="text-sm text-[var(--color-ink-muted)]">{detail.description}</p>
+                    <p className="mt-2 text-sm text-[var(--color-ink-muted)]">
+                      {detail.selectionType === 'SINGLE'
+                        ? 'Choose one option'
+                        : 'Choose multiple options'}
+                      {detail.isRequired ? ' · required' : ' · optional'}
+                    </p>
+                  </div>
+                  {hasPermission('menu.update') && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setEditingGroup(detail);
+                        setGroupForm({
+                          name: detail.name,
+                          description: detail.description || '',
+                          selectionType: detail.selectionType,
+                          minSelect: detail.minSelect,
+                          maxSelect: detail.maxSelect,
+                          isRequired: detail.isRequired,
+                          isActive: detail.isActive,
+                        });
+                        setGroupOpen(true);
+                      }}
+                    >
+                      <Pencil size={14} />
+                      Edit group
+                    </Button>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold">Customization options</h3>
+                  {hasPermission('menu.create') && (
+                    <Button
+                      onClick={() => {
+                        setEditingModifier(null);
+                        setModifierForm(emptyModifier);
+                        setModifierOpen(true);
+                      }}
+                    >
+                      <Plus size={14} />
+                      Add option
+                    </Button>
+                  )}
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-left text-sm">
+                    <thead className="text-[var(--color-ink-muted)]">
+                      <tr>
+                        <th className="py-2 font-medium">Option</th>
+                        <th className="py-2 font-medium">Extra price</th>
+                        <th className="py-2 font-medium">Status</th>
+                        <th className="py-2 font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(detail.modifiers || []).map((m) => (
+                        <tr key={m.id} className="border-t border-[var(--color-line)]">
+                          <td className="py-2">{m.name}</td>
+                          <td className="py-2">
+                            {Number(m.priceDelta) === 0 ? 'Free' : `+${money(m.priceDelta)}`}
+                          </td>
+                          <td className="py-2">
+                            <Badge tone={m.isActive ? 'success' : 'muted'}>
+                              {m.isActive ? 'Active' : 'Inactive'}
+                            </Badge>
+                          </td>
+                          <td className="py-2">
+                            {hasPermission('menu.update') && (
+                              <Button
+                                variant="ghost"
+                                onClick={() => {
+                                  setEditingModifier(m);
+                                  setModifierForm({
+                                    name: m.name,
+                                    description: m.description || '',
+                                    priceDelta: m.priceDelta,
+                                    sortOrder: m.sortOrder,
+                                    isActive: m.isActive,
+                                  });
+                                  setModifierOpen(true);
+                                }}
+                              >
+                                Edit
+                              </Button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                      {!(detail.modifiers || []).length && (
+                        <tr>
+                          <td colSpan={4} className="py-6 text-[var(--color-ink-muted)]">
+                            No options in this group yet.
+                          </td>
+                        </tr>
                       )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
 
       <Modal
         open={groupOpen}
@@ -384,7 +433,6 @@ export default function ModifiersPage() {
           </div>
         </form>
       </Modal>
-      </div>
     </div>
   );
 }

@@ -1,24 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, Pencil } from 'lucide-react';
+import { Plus, Pencil, Trash2 } from 'lucide-react';
 import { tablesApi } from '../../services/posService';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../components/ui/Toast';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
-import { Field, TextInput, TextArea, Select } from '../../components/ui/Input';
+import ConfirmDeleteModal from '../../components/ui/ConfirmDeleteModal';
+import { Field, TextInput, TextArea } from '../../components/ui/Input';
 import {
-  FLOORS,
   STATUS_BADGE_TONE,
   STATUS_LABEL,
+  floorsFromTables,
   tablesForFloor,
-  otherTables,
+  defaultSection,
 } from '../../utils/floors';
 
 const empty = {
   number: '',
   capacity: 4,
-  section: 'Ground Floor',
+  section: '',
   notes: '',
   isActive: true,
 };
@@ -27,11 +28,12 @@ export default function TablesPage() {
   const { hasPermission } = useAuth();
   const toast = useToast();
   const [rows, setRows] = useState([]);
-  const [floor, setFloor] = useState(FLOORS[0].key);
+  const [floor, setFloor] = useState('');
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(empty);
-
+  const [deleting, setDeleting] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const load = useCallback(async () => {
     try {
       const data = await tablesApi.list({ limit: 100, isActive: true });
@@ -45,17 +47,24 @@ export default function TablesPage() {
     load();
   }, [load]);
 
-  const extras = useMemo(() => otherTables(rows), [rows]);
-  const floorTabs = useMemo(() => {
-    const tabs = [...FLOORS];
-    if (extras.length) tabs.push({ key: '__other__', label: 'Other' });
-    return tabs;
-  }, [extras.length]);
+  const floorTabs = useMemo(() => floorsFromTables(rows), [rows]);
 
-  const visible = useMemo(() => {
-    if (floor === '__other__') return extras;
-    return tablesForFloor(rows, floor);
-  }, [rows, floor, extras]);
+  useEffect(() => {
+    if (!floorTabs.length) {
+      setFloor('');
+      return;
+    }
+    if (!floorTabs.some((t) => t.key === floor)) {
+      setFloor(floorTabs[0].key);
+    }
+  }, [floorTabs, floor]);
+
+  const visible = useMemo(() => tablesForFloor(rows, floor), [rows, floor]);
+
+  const sectionOptions = useMemo(() => {
+    const opts = floorsFromTables(rows).filter((f) => f.key !== 'Unassigned');
+    return opts;
+  }, [rows]);
 
   async function save(e) {
     e.preventDefault();
@@ -91,20 +100,39 @@ export default function TablesPage() {
     }
   }
 
+  async function confirmDelete() {
+    if (!deleting) return;
+    setDeleteBusy(true);
+    try {
+      await tablesApi.remove(deleting.id);
+      toast.success(`Table ${deleting.number} deleted`);
+      setDeleting(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Delete failed');
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="app-title">Tables</h1>
-          <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
-            Ground Floor (7) and First Floor (8). Capacities can be edited per table.
+          <h1 className="font-[family-name:var(--font-display)] text-2xl font-semibold">Tables</h1>
+          <p className="text-sm text-[var(--color-ink-muted)]">
+            {rows.length} table{rows.length === 1 ? '' : 's'}
+            {floorTabs.length
+              ? ` · ${floorTabs.map((f) => `${f.label} (${tablesForFloor(rows, f.key).length})`).join(', ')}`
+              : ''}
           </p>
         </div>
         {hasPermission('tables.manage') && (
           <Button
             onClick={() => {
               setEditing(null);
-              setForm({ ...empty, section: floor === '__other__' ? 'Ground Floor' : floor });
+              const section = floor && floor !== 'Unassigned' ? floor : defaultSection(rows);
+              setForm({ ...empty, section });
               setOpen(true);
             }}
           >
@@ -158,7 +186,7 @@ export default function TablesPage() {
                       setForm({
                         number: row.number,
                         capacity: row.capacity,
-                        section: row.section || 'Ground Floor',
+                        section: row.section || '',
                         notes: row.notes || '',
                         isActive: row.isActive,
                       });
@@ -173,6 +201,10 @@ export default function TablesPage() {
                       Mark available
                     </Button>
                   )}
+                  <Button variant="danger" onClick={() => setDeleting(row)}>
+                    <Trash2 size={14} />
+                    Delete
+                  </Button>
                 </>
               )}
             </div>
@@ -201,17 +233,18 @@ export default function TablesPage() {
               onChange={(e) => setForm({ ...form, capacity: e.target.value })}
             />
           </Field>
-          <Field label="Floor">
-            <Select
+          <Field label="Section / Floor" hint="Type a section name; existing sections appear below">
+            <TextInput
+              list="table-section-options"
+              placeholder="e.g. Ground Floor"
               value={form.section}
               onChange={(e) => setForm({ ...form, section: e.target.value })}
-            >
-              {FLOORS.map((f) => (
-                <option key={f.key} value={f.key}>
-                  {f.label}
-                </option>
+            />
+            <datalist id="table-section-options">
+              {sectionOptions.map((f) => (
+                <option key={f.key} value={f.key} />
               ))}
-            </Select>
+            </datalist>
           </Field>
           <Field label="Notes">
             <TextArea
@@ -236,6 +269,16 @@ export default function TablesPage() {
           </div>
         </form>
       </Modal>
+
+      <ConfirmDeleteModal
+        open={Boolean(deleting)}
+        title="Delete table"
+        itemName={deleting ? `Table ${deleting.number}` : undefined}
+        message="Tables with an active session cannot be deleted."
+        loading={deleteBusy}
+        onConfirm={confirmDelete}
+        onClose={() => !deleteBusy && setDeleting(null)}
+      />
     </div>
   );
 }

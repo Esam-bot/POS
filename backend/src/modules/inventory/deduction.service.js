@@ -141,7 +141,7 @@ async function previewDeduction(orderId) {
 }
 
 /**
- * Consume ingredients once per order after successful payment.
+ * Consume ingredients once per order when preparation starts (PREPARING).
  * @param {object} opts
  * @param {string} opts.orderId
  * @param {string} opts.userId
@@ -224,7 +224,7 @@ async function deductForOrder({ orderId, userId, allowNegative = false, tx: oute
         orderId,
         notes: shortages.length
           ? `Deducted with shortage override (${shortages.length} items)`
-          : 'Deducted after successful payment',
+          : 'Deducted when preparation started',
       },
     });
 
@@ -252,6 +252,67 @@ async function deductForOrder({ orderId, userId, allowNegative = false, tx: oute
   };
 
   if (outerTx) return run(outerTx);
+  const result = await prisma.$transaction(run);
+  try {
+    const { syncLowStockNotification } = require('./lowStockNotify');
+    for (const m of result.movements || []) {
+      await syncLowStockNotification(null, m.ingredientId);
+    }
+  } catch {
+    /* best-effort notify outside tx */
+  }
+  return result;
+}
+
+/**
+ * After cancel post-prep: mark consumed stock as waste (do not restock). Idempotent via wastageAt.
+ */
+async function recordCancelWastage({ orderId, userId, reason, tx: outerTx = null }) {
+  const run = async (tx) => {
+    const deduction = await tx.orderInventoryDeduction.findUnique({ where: { orderId } });
+    if (!deduction) return { recorded: false, reason: 'nothing_deducted' };
+    if (deduction.wastageAt) return { recorded: false, reason: 'already_recorded' };
+
+    const consumes = await tx.inventoryTransaction.findMany({
+      where: { referenceType: 'Order', referenceId: orderId, type: 'CONSUME' },
+    });
+
+    const now = new Date();
+    for (const c of consumes) {
+      const qty = D(c.quantity).abs();
+      if (qty.lte(0)) continue;
+      await tx.wastageRecord.create({
+        data: {
+          ingredientId: c.ingredientId,
+          quantity: qty,
+          reason: reason || 'Order cancelled after preparation',
+          createdById: userId,
+        },
+      });
+      await tx.inventoryTransaction.create({
+        data: {
+          ingredientId: c.ingredientId,
+          type: 'WASTE',
+          quantity: qty.neg(),
+          stockBefore: c.stockAfter,
+          stockAfter: c.stockAfter,
+          referenceType: 'Order',
+          referenceId: orderId,
+          notes: `Wastage on cancel (already consumed): ${reason || ''}`.trim(),
+          createdById: userId,
+        },
+      });
+    }
+
+    await tx.orderInventoryDeduction.update({
+      where: { orderId },
+      data: { wastageAt: now },
+    });
+
+    return { recorded: true, count: consumes.length };
+  };
+
+  if (outerTx) return run(outerTx);
   return prisma.$transaction(run);
 }
 
@@ -259,4 +320,5 @@ module.exports = {
   buildRequirements,
   previewDeduction,
   deductForOrder,
+  recordCancelWastage,
 };

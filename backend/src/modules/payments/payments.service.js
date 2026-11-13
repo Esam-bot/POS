@@ -4,8 +4,6 @@ const { serializeDecimals } = require('../../utils/decimal');
 const { hashPayload } = require('../../utils/moneyMath');
 const billing = require('../billing/billing.service');
 const printService = require('../printing/print.service');
-const inventoryDeduction = require('../inventory/deduction.service');
-const sessionsService = require('../sessions/sessions.service');
 const { D, money2 } = billing;
 
 const paymentInclude = {
@@ -97,8 +95,6 @@ async function findBatchByKey(key, orderId) {
 async function createPayments(orderId, body, userId, idempotencyKey, options = {}) {
   const key = idempotencyKey || body.idempotencyKey;
   if (!key) throw new AppError('Idempotency-Key is required', 400);
-  const allowNegativeStock = Boolean(options.allowNegativeStock);
-
   const canonical = {
     orderId,
     portions: body.portions.map((p) => ({
@@ -117,12 +113,6 @@ async function createPayments(orderId, body, userId, idempotencyKey, options = {
       throw new AppError('Idempotency key reused with a different payload', 422);
     }
     const printMeta = await printService.initiatePrintAfterPayment(orderId);
-    // Recover deduction if first response crashed after payment
-    await inventoryDeduction.deductForOrder({
-      orderId,
-      userId,
-      allowNegative: allowNegativeStock,
-    });
     return serializeDecimals({
       payments: existingBatch.batch,
       replayed: true,
@@ -264,33 +254,13 @@ async function createPayments(orderId, body, userId, idempotencyKey, options = {
         },
       });
 
-      // First successful payment only — OrderInventoryDeduction unique constraint
-      const inventory = await inventoryDeduction.deductForOrder({
-        orderId,
-        userId,
-        allowNegative: allowNegativeStock,
-        tx,
-      });
-
-      let autoRelease = { released: false };
-      if (order.tableSessionId) {
-        autoRelease = await sessionsService.tryAutoRelease(tx, order.tableSessionId, {
-          userId,
-        });
-      }
-
-      return { payments: created, inventory, autoRelease };
+      return { payments: created };
     });
 
     // Idempotent: initiatePrint only when PrintJobs are newly created (first successful payment).
     // On replay, still call ensure so a crashed first response can recover without duplicating jobs.
     if (result?.__replayed) {
       const printMeta = await printService.initiatePrintAfterPayment(orderId);
-      await inventoryDeduction.deductForOrder({
-        orderId,
-        userId,
-        allowNegative: allowNegativeStock,
-      });
       return serializeDecimals({
         payments: result.payments,
         replayed: true,
@@ -305,8 +275,6 @@ async function createPayments(orderId, body, userId, idempotencyKey, options = {
       replayed: false,
       printJobs: printMeta.printJobs,
       initiatePrint: printMeta.initiatePrint,
-      inventoryDeducted: Boolean(result.inventory?.deducted && !result.inventory?.replayed),
-      autoRelease: result.autoRelease || { released: false },
     });
   } catch (err) {
     if (err.code === 'P2002') {
@@ -316,11 +284,6 @@ async function createPayments(orderId, body, userId, idempotencyKey, options = {
           throw new AppError('Idempotency key reused with a different payload', 422);
         }
         const printMeta = await printService.initiatePrintAfterPayment(orderId);
-        await inventoryDeduction.deductForOrder({
-          orderId,
-          userId,
-          allowNegative: allowNegativeStock,
-        });
         return serializeDecimals({
           payments: again.batch,
           replayed: true,
@@ -333,11 +296,6 @@ async function createPayments(orderId, body, userId, idempotencyKey, options = {
     const again = await findBatchByKey(key, orderId);
     if (again && (!again.primary.requestHash || again.primary.requestHash === requestHash)) {
       const printMeta = await printService.initiatePrintAfterPayment(orderId);
-      await inventoryDeduction.deductForOrder({
-        orderId,
-        userId,
-        allowNegative: allowNegativeStock,
-      });
       return serializeDecimals({
         payments: again.batch,
         replayed: true,
@@ -467,14 +425,7 @@ async function settleWithoutPayment(orderId, status, reason, userId) {
       },
     });
 
-    let autoRelease = { released: false };
-    if (order.tableSessionId) {
-      autoRelease = await sessionsService.tryAutoRelease(tx, order.tableSessionId, {
-        userId,
-      });
-    }
-
-    return serializeDecimals({ ...updated, autoRelease });
+    return serializeDecimals(updated);
   });
 }
 
@@ -483,11 +434,9 @@ async function createReceipt(orderId, userId) {
     where: { id: orderId },
     include: {
       items: { include: { modifiers: true } },
-      diningTable: true,
       createdBy: { select: { id: true, name: true } },
       payments: { include: paymentInclude },
       discounts: true,
-      tableSession: true,
       refunds: true,
     },
   });
@@ -517,7 +466,6 @@ async function createReceipt(orderId, userId) {
       type: order.type,
       status: order.status,
       paymentStatus: order.paymentStatus,
-      table: order.diningTable?.number || null,
       customerName:
         order.customerName ||
         order.deliveryAddressSnapshot?.name ||

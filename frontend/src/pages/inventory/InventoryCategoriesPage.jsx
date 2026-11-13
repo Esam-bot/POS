@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { inventoryApi } from '../../services/inventoryService';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../components/ui/Toast';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
+import ConfirmDeleteModal from '../../components/ui/ConfirmDeleteModal';
 import { Field, TextInput, TextArea } from '../../components/ui/Input';
 
 const empty = { name: '', description: '', isActive: true };
@@ -20,6 +21,8 @@ export default function InventoryCategoriesPage() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(empty);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -85,6 +88,21 @@ export default function InventoryCategoriesPage() {
     }
   }
 
+  async function confirmDelete() {
+    if (!deleting) return;
+    setDeleteBusy(true);
+    try {
+      await inventoryApi.deleteCategory(deleting.id);
+      toast.success('Category deleted');
+      setDeleting(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Delete failed');
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -134,6 +152,10 @@ export default function InventoryCategoriesPage() {
                       </Button>
                       <Button variant="secondary" onClick={() => toggleStatus(row)}>
                         {row.isActive ? 'Deactivate' : 'Activate'}
+                      </Button>
+                      <Button variant="danger" onClick={() => setDeleting(row)}>
+                        <Trash2 size={14} />
+                        Delete
                       </Button>
                     </>
                   )}
@@ -189,6 +211,16 @@ export default function InventoryCategoriesPage() {
           </div>
         </form>
       </Modal>
+
+      <ConfirmDeleteModal
+        open={Boolean(deleting)}
+        title="Delete category"
+        itemName={deleting?.name}
+        message="Categories with ingredients cannot be deleted."
+        loading={deleteBusy}
+        onConfirm={confirmDelete}
+        onClose={() => !deleteBusy && setDeleting(null)}
+      />
     </div>
   );
 }

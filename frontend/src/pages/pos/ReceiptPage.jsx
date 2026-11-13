@@ -22,7 +22,7 @@ export default function ReceiptPage() {
   }, [id, toast]);
 
   if (!receipt) {
-    return <p className="p-4 text-white/70">Preparing receipt…</p>;
+    return <p className="p-4 text-[var(--color-ink-muted)]">Preparing receipt…</p>;
   }
 
   const snap = receipt.snapshot || {};
@@ -34,7 +34,7 @@ export default function ReceiptPage() {
   const refunds = snap.refunds || [];
 
   return (
-    <div className="p-4 text-white">
+    <div className="p-4 text-[var(--color-ink)]">
       <div className="mb-4 flex gap-2 print:hidden">
         <Link to={`/pos/orders/${id}`}>
           <Button variant="secondary">Back</Button>
@@ -42,7 +42,7 @@ export default function ReceiptPage() {
         <Button onClick={() => window.print()}>Print</Button>
       </div>
 
-      <article className="theme-light receipt mx-auto rounded-xl bg-white p-5 text-[var(--color-ink)] shadow-lg print:rounded-none print:shadow-none">
+      <article className="receipt mx-auto rounded-xl bg-[var(--color-section)] p-5 text-[var(--color-ink)] shadow-lg print:rounded-none print:shadow-none">
         <header className="border-b border-dashed border-black/30 pb-3 text-center">
           <h1 className="text-lg font-bold">{restaurant.name || 'Restaurant'}</h1>
           {restaurant.address && <p className="text-xs">{restaurant.address}</p>}
@@ -50,7 +50,6 @@ export default function ReceiptPage() {
           <p className="mt-2 text-sm font-semibold">Receipt {receipt.receiptNumber}</p>
           <p className="text-xs">
             {order.orderNumber} · {order.type}
-            {order.table ? ` · Table ${order.table}` : ''}
           </p>
           <p className="text-xs">
             {order.createdAt ? new Date(order.createdAt).toLocaleString() : ''}
@@ -59,6 +58,16 @@ export default function ReceiptPage() {
             <p className="mt-1 text-xs font-semibold">Customer: {order.customerName}</p>
           )}
           {order.customerPhone && <p className="text-xs">Phone: {order.customerPhone}</p>}
+          {order.type === 'DELIVERY' && order.deliveryAddressSnapshot && (
+            <>
+              <p className="mt-1 text-xs">
+                Address: {order.deliveryAddressSnapshot.line1 || '—'}
+              </p>
+              {order.deliveryAddressSnapshot.city ? (
+                <p className="text-xs">Area: {order.deliveryAddressSnapshot.city}</p>
+              ) : null}
+            </>
+          )}
         </header>
 
         <section className="space-y-1 border-b border-dashed border-black/30 py-3 text-xs">

@@ -1,7 +1,6 @@
 const ordersService = require('./orders.service');
 const { success } = require('../../utils/apiResponse');
-const { emitEvent } = require('../../sockets/emit');
-const { emitAutoReleaseEvents } = require('../../sockets/emitAutoRelease');
+const { emitEvent, emitKitchenTickets } = require('../../sockets/emit');
 
 function stripInternal(data) {
   if (!data || typeof data !== 'object') return data;
@@ -10,6 +9,16 @@ function stripInternal(data) {
   delete copy._cancelledKitchenTickets;
   delete copy._printJobs;
   return copy;
+}
+
+function emitKitchenSideEffects(req, data) {
+  if (data?._kitchenTickets?.length) {
+    emitKitchenTickets(req, 'kitchen.tickets.created', data._kitchenTickets);
+    emitKitchenTickets(req, 'kitchen.ticket.updated', data._kitchenTickets);
+  }
+  if (data?._cancelledKitchenTickets?.length) {
+    emitKitchenTickets(req, 'kitchen.ticket.cancelled', data._cancelledKitchenTickets);
+  }
 }
 
 async function list(req, res, next) {
@@ -50,12 +59,23 @@ async function addItems(req, res, next) {
   }
 }
 
+function allowNegativeFromReq(req) {
+  return (
+    Boolean(req.body?.allowNegativeStock) &&
+    (req.user.roles?.includes('ADMIN') ||
+      req.user.permissions?.includes('inventory.allow_negative'))
+  );
+}
+
 async function submit(req, res, next) {
   try {
-    const data = await ordersService.submitOrder(req.params.id, req.user.id);
+    const data = await ordersService.submitOrder(req.params.id, req.user.id, {
+      allowNegativeStock: allowNegativeFromReq(req),
+    });
+    emitKitchenSideEffects(req, data);
     const clean = stripInternal(data);
     emitEvent(req, 'order.status.updated', clean);
-    return success(res, 'Order submitted', clean);
+    return success(res, 'Order submitted — preparation started', clean);
   } catch (err) {
     next(err);
   }
@@ -67,8 +87,10 @@ async function transition(req, res, next) {
       req.params.id,
       req.body.status,
       req.user.id,
-      req.body.reason
+      req.body.reason,
+      { allowNegativeStock: allowNegativeFromReq(req) }
     );
+    emitKitchenSideEffects(req, data);
     const clean = stripInternal(data);
     emitEvent(req, 'order.status.updated', clean);
     return success(res, 'Order status updated', clean);
@@ -80,9 +102,9 @@ async function transition(req, res, next) {
 async function cancel(req, res, next) {
   try {
     const data = await ordersService.cancelOrder(req.params.id, req.user.id, req.body.reason);
+    emitKitchenSideEffects(req, data);
     const clean = stripInternal(data);
     emitEvent(req, 'order.status.updated', clean);
-    emitAutoReleaseEvents(req, data.autoRelease);
     return success(res, 'Order cancelled', clean);
   } catch (err) {
     next(err);

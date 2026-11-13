@@ -1,38 +1,15 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ordersApi } from '../../services/posService';
 import { money } from '../../utils/formatMoney';
 import { billingApi } from '../../services/billingService';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../components/ui/Toast';
+import { useSocket } from '../../hooks/useSocket';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
 import Modal from '../../components/ui/Modal';
 import { Field, TextInput, Select, TextArea } from '../../components/ui/Input';
-
-const nextActions = {
-  DINE_IN: {
-    PLACED: 'CONFIRMED',
-    CONFIRMED: 'PREPARING',
-    PREPARING: 'READY',
-    READY: 'SERVED',
-    SERVED: 'COMPLETED',
-  },
-  TAKEAWAY: {
-    PLACED: 'CONFIRMED',
-    CONFIRMED: 'PREPARING',
-    PREPARING: 'READY',
-    READY: 'COMPLETED',
-  },
-  DELIVERY: {
-    PLACED: 'CONFIRMED',
-    CONFIRMED: 'PREPARING',
-    PREPARING: 'READY',
-    READY: 'OUT_FOR_DELIVERY',
-    OUT_FOR_DELIVERY: 'DELIVERED',
-    DELIVERED: 'COMPLETED',
-  },
-};
 
 export default function OrderDetailPage() {
   const { id } = useParams();
@@ -49,6 +26,7 @@ export default function OrderDetailPage() {
   const [refundType, setRefundType] = useState('PAYMENT_CORRECTION');
   const [refundReason, setRefundReason] = useState('');
   const [refunding, setRefunding] = useState(false);
+  const readyToastFor = useRef(null);
 
   const load = useCallback(async () => {
     try {
@@ -63,28 +41,72 @@ export default function OrderDetailPage() {
     load();
   }, [load]);
 
-  if (!order) return <p className="p-4 text-white/70">Loading order…</p>;
+  useEffect(() => {
+    readyToastFor.current = null;
+  }, [id]);
 
-  const next = nextActions[order.type]?.[order.status];
+  useSocket(
+    'pos',
+    ['order.status.updated', 'order.ready', 'order.updated', 'payment.created', '__connected'],
+    (event, payload) => {
+      if (event === '__connected') {
+        load();
+        return;
+      }
+      const orderId = payload?.id || payload?.orderId;
+      if (orderId && orderId !== id) return;
+
+      if (event === 'order.ready' && orderId === id && readyToastFor.current !== id) {
+        readyToastFor.current = id;
+        toast.success(payload?.message || 'Order is ready');
+      }
+      load();
+    },
+    true
+  );
+
+  if (!order) return <p className="p-4 text-[var(--color-ink-muted)]">Loading order…</p>;
 
   return (
-    <div className="space-y-4 p-4 text-white">
+    <div className="space-y-4 p-4 text-[var(--color-ink)]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-[family-name:var(--font-display)] text-2xl font-semibold tracking-tight">
             {order.orderNumber}
           </h1>
-          <p className="mt-1 text-sm text-white/60">
-            {order.type.replaceAll('_', ' ')} · <Badge tone="brand">{order.status}</Badge>
+          <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
+            {order.type.replaceAll('_', ' ')}
+            {order.diningTable?.number ? ` · Table ${order.diningTable.number}` : ''}
+            {' · '}
+            <Badge tone={order.status === 'READY' ? 'success' : 'brand'}>{order.status}</Badge>
             {' · '}
             <Badge tone="warning">{String(order.paymentStatus || '').replaceAll('_', ' ')}</Badge>
-            {order.diningTable ? ` · Table ${order.diningTable.number}` : ''}
           </p>
+          {order.estimatedReadyAt && order.status === 'PREPARING' && (
+            <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
+              ETA {new Date(order.estimatedReadyAt).toLocaleTimeString()}
+            </p>
+          )}
           {(order.customerName || order.customerPhone) && (
-            <p className="mt-1 text-sm text-white/80">
+            <p className="mt-1 text-sm text-[var(--color-ink)]">
               {order.customerName || 'Customer'}
               {order.customerPhone ? ` · ${order.customerPhone}` : ''}
             </p>
+          )}
+          {order.type === 'DELIVERY' && order.deliveryAddressSnapshot && (
+            <div className="mt-2 rounded-lg border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2 text-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-muted)]">
+                Delivery address
+              </p>
+              <p className="mt-1 text-[var(--color-ink)]">
+                {order.deliveryAddressSnapshot.line1 || '—'}
+              </p>
+              {order.deliveryAddressSnapshot.city ? (
+                <p className="text-[var(--color-ink-muted)]">
+                  Near: {order.deliveryAddressSnapshot.city}
+                </p>
+              ) : null}
+            </div>
           )}
         </div>
         <div className="flex flex-wrap gap-2">
@@ -103,26 +125,62 @@ export default function OrderDetailPage() {
           <Link to="/pos">
             <Button variant="secondary">New order</Button>
           </Link>
-          {next && hasPermission('orders.update') && (
-            <Button
-              onClick={async () => {
-                try {
-                  await ordersApi.transition(order.id, next);
-                  toast.success(`Moved to ${next}`);
-                  load();
-                } catch (err) {
-                  toast.error(err.response?.data?.message || 'Transition failed');
-                }
-              }}
-            >
-              Mark {next}
-            </Button>
-          )}
-          {hasPermission('orders.split') && order.tableSessionId && (
+          {hasPermission('orders.split') &&
+            !['COMPLETED', 'CANCELLED'].includes(order.status) && (
             <Button variant="secondary" onClick={() => setSplitOpen(true)}>
               Split items
             </Button>
           )}
+          {hasPermission('orders.update') && order.status === 'PREPARING' && (
+            <Button
+              variant="secondary"
+              onClick={async () => {
+                try {
+                  await ordersApi.transition(order.id, 'READY');
+                  toast.success('Marked ready');
+                  load();
+                } catch (err) {
+                  toast.error(err.response?.data?.message || 'Failed');
+                }
+              }}
+            >
+              Mark ready
+            </Button>
+          )}
+          {hasPermission('orders.update') && order.status === 'READY' && order.type === 'DINE_IN' && (
+            <Button
+              variant="secondary"
+              onClick={async () => {
+                try {
+                  await ordersApi.transition(order.id, 'SERVED');
+                  toast.success('Marked served');
+                  load();
+                } catch (err) {
+                  toast.error(err.response?.data?.message || 'Failed');
+                }
+              }}
+            >
+              Mark served
+            </Button>
+          )}
+          {hasPermission('orders.update') &&
+            ['READY', 'SERVED', 'DELIVERED'].includes(order.status) &&
+            ['PAID', 'COMPLIMENTARY', 'WRITTEN_OFF'].includes(order.paymentStatus) && (
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  try {
+                    await ordersApi.transition(order.id, 'COMPLETED');
+                    toast.success('Order completed');
+                    load();
+                  } catch (err) {
+                    toast.error(err.response?.data?.message || 'Failed');
+                  }
+                }}
+              >
+                Complete
+              </Button>
+            )}
           {hasPermission('orders.cancel') &&
             ['DRAFT', 'PLACED', 'CONFIRMED', 'PREPARING'].includes(order.status) && (
               <Button variant="danger" onClick={() => setCancelOpen(true)}>
@@ -132,30 +190,30 @@ export default function OrderDetailPage() {
         </div>
       </div>
 
-      <section className="rounded-xl bg-white/5 p-4">
+      <section className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
         <h2 className="mb-3 font-semibold">Items</h2>
         <div className="space-y-2">
           {order.items.map((item) => (
-            <div key={item.id} className="flex justify-between rounded-lg bg-white/10 px-3 py-2 text-sm">
+            <div key={item.id} className="flex justify-between rounded-lg bg-[var(--color-section)] px-3 py-2 text-sm">
               <div>
                 <p className="font-medium">
                   {item.quantity} × {item.nameSnapshot}
                   {item.variantNameSnapshot ? ` (${item.variantNameSnapshot})` : ''}
                 </p>
                 {(item.modifiers || []).map((m) => (
-                  <p key={m.id} className="text-xs text-white/60">
+                  <p key={m.id} className="text-xs text-[var(--color-ink-muted)]">
                     + {m.nameSnapshot}
                   </p>
                 ))}
                 {item.specialInstructions && (
-                  <p className="text-xs text-amber-200">Note: {item.specialInstructions}</p>
+                  <p className="text-xs text-[var(--color-warning)]">Note: {item.specialInstructions}</p>
                 )}
               </div>
               <p>{money(item.lineTotal)}</p>
             </div>
           ))}
         </div>
-        <div className="mt-4 space-y-1 border-t border-white/10 pt-3 text-sm">
+        <div className="mt-4 space-y-1 border-t border-[var(--color-line)] pt-3 text-sm">
           <div className="flex justify-between"><span>Subtotal</span><span>{money(order.subtotal)}</span></div>
           <div className="flex justify-between"><span>Discount</span><span>{money(order.discountTotal)}</span></div>
           <div className="flex justify-between"><span>Tax</span><span>{money(order.taxTotal)}</span></div>
@@ -166,20 +224,20 @@ export default function OrderDetailPage() {
         </div>
       </section>
 
-      <section className="rounded-xl bg-white/5 p-4">
+      <section className="rounded-xl border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
         <h2 className="mb-3 font-semibold">Payments</h2>
         {(order.payments || []).length === 0 ? (
-          <p className="text-sm text-white/60">No payments yet.</p>
+          <p className="text-sm text-[var(--color-ink-muted)]">No payments yet.</p>
         ) : (
           <div className="space-y-3">
             {order.payments.map((p) => (
-              <div key={p.id} className="rounded-lg bg-white/10 px-3 py-2 text-sm">
+              <div key={p.id} className="rounded-lg bg-[var(--color-section)] px-3 py-2 text-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="font-medium">
                       {p.method?.name || 'Payment'} · {money(p.amount)}
                     </p>
-                    <p className="text-xs text-white/60">
+                    <p className="text-xs text-[var(--color-ink-muted)]">
                       Pre-tax {money(p.preTaxAmount)} · Tax {Number(p.taxRateSnapshot)}% ={' '}
                       {money(p.taxAmount)}
                       {p.reference ? ` · Ref ${p.reference}` : ''}
@@ -203,7 +261,7 @@ export default function OrderDetailPage() {
                     )}
                 </div>
                 {(p.refunds || []).map((r) => (
-                  <p key={r.id} className="mt-1 text-xs text-amber-200">
+                  <p key={r.id} className="mt-1 text-xs text-[var(--color-warning)]">
                     Refund {r.type}: {money(r.amount)} — {r.reason}
                   </p>
                 ))}
@@ -211,21 +269,6 @@ export default function OrderDetailPage() {
             ))}
           </div>
         )}
-      </section>
-
-      <section className="rounded-xl bg-white/5 p-4">
-        <h2 className="mb-3 font-semibold">Status history</h2>
-        <div className="space-y-2 text-sm">
-          {(order.statusHistory || []).map((h) => (
-            <div key={h.id} className="flex justify-between text-white/70">
-              <span>
-                {h.fromStatus || '—'} → {h.toStatus}
-                {h.reason ? ` (${h.reason})` : ''}
-              </span>
-              <span>{new Date(h.createdAt).toLocaleString()}</span>
-            </div>
-          ))}
-        </div>
       </section>
 
       <Modal open={cancelOpen} title="Cancel order" onClose={() => setCancelOpen(false)}>

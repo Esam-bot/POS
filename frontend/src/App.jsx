@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+import { RestaurantProvider } from './context/RestaurantContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import AdminLayout from './layouts/AdminLayout';
 import POSLayout from './layouts/POSLayout';
@@ -8,9 +9,11 @@ import DashboardPage from './pages/dashboard/DashboardPage';
 import POSPage from './pages/pos/POSPage';
 import POSTablesPage from './pages/pos/POSTablesPage';
 import SessionDetailPage from './pages/pos/SessionDetailPage';
+import OrderBoardPage from './pages/pos/OrderBoardPage';
 import POSOrdersPage from './pages/pos/POSOrdersPage';
 import OrderDetailPage from './pages/pos/OrderDetailPage';
 import PaymentPage from './pages/pos/PaymentPage';
+import ErrorBoundary from './components/ErrorBoundary';
 import ReceiptPage from './pages/pos/ReceiptPage';
 import OrderPrintPage from './pages/pos/OrderPrintPage';
 import OrdersPage from './pages/orders/OrdersPage';
@@ -28,19 +31,19 @@ import InventoryCategoriesPage from './pages/inventory/InventoryCategoriesPage';
 import InventoryStockPage from './pages/inventory/InventoryStockPage';
 import InventoryHistoryPage from './pages/inventory/InventoryHistoryPage';
 import InventoryRecipesPage from './pages/inventory/InventoryRecipesPage';
-import SuppliersPage from './pages/suppliers/SuppliersPage';
-import PurchasesPage from './pages/purchases/PurchasesPage';
-import CustomersPage from './pages/customers/CustomersPage';
-import EmployeesPage from './pages/employees/EmployeesPage';
-import ShiftsPage from './pages/shifts/ShiftsPage';
-import ExpensesPage from './pages/expenses/ExpensesPage';
+import InventorySuppliersPage from './pages/inventory/InventorySuppliersPage';
+import InventoryPurchasesPage from './pages/inventory/InventoryPurchasesPage';
+import InventoryReportsPage from './pages/inventory/InventoryReportsPage';
 import ReportsPage from './pages/reports/ReportsPage';
 import SettingsPage from './pages/settings/SettingsPage';
+import KitchenLayout from './layouts/KitchenLayout';
+import KitchenBoardPage from './pages/kitchen/KitchenBoardPage';
 import { ToastProvider } from './components/ui/Toast';
 
 export default function App() {
   return (
     <AuthProvider>
+      <RestaurantProvider>
       <ToastProvider>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
@@ -64,15 +67,18 @@ export default function App() {
               <Route path="stock" element={<InventoryStockPage />} />
               <Route path="history" element={<InventoryHistoryPage />} />
               <Route path="recipes" element={<InventoryRecipesPage />} />
+              <Route path="suppliers" element={<InventorySuppliersPage />} />
+              <Route path="purchases" element={<InventoryPurchasesPage />} />
+              <Route path="reports" element={<InventoryReportsPage />} />
             </Route>
-            <Route path="suppliers" element={<SuppliersPage />} />
-            <Route path="purchases" element={<PurchasesPage />} />
-            <Route path="customers" element={<CustomersPage />} />
-            <Route path="employees" element={<EmployeesPage />} />
-            <Route path="shifts" element={<ShiftsPage />} />
-            <Route path="expenses" element={<ExpensesPage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="settings" element={<SettingsPage />} />
+          </Route>
+
+          <Route element={<ProtectedRoute permission="kitchen.view" />}>
+            <Route path="/kitchen" element={<KitchenLayout />}>
+              <Route index element={<KitchenBoardPage />} />
+            </Route>
           </Route>
 
           <Route element={<ProtectedRoute permission="pos.access" />}>
@@ -80,9 +86,17 @@ export default function App() {
               <Route index element={<POSPage />} />
               <Route path="tables" element={<POSTablesPage />} />
               <Route path="sessions/:id" element={<SessionDetailPage />} />
+              <Route path="board" element={<OrderBoardPage />} />
               <Route path="orders" element={<POSOrdersPage />} />
               <Route path="orders/:id" element={<OrderDetailPage />} />
-              <Route path="orders/:id/pay" element={<PaymentPage />} />
+              <Route
+                path="orders/:id/pay"
+                element={
+                  <ErrorBoundary>
+                    <PaymentPage />
+                  </ErrorBoundary>
+                }
+              />
               <Route path="orders/:id/print" element={<OrderPrintPage />} />
               <Route path="orders/:id/receipt" element={<ReceiptPage />} />
             </Route>
@@ -93,6 +107,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/admin" replace />} />
       </Routes>
       </ToastProvider>
+      </RestaurantProvider>
     </AuthProvider>
   );
 }

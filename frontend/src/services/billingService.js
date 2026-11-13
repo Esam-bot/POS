@@ -44,14 +44,36 @@ export const billingApi = {
 };
 
 export const settingsApi = {
+  publicBranding: () => api.get('/settings/public').then(unwrap),
   get: () => api.get('/settings').then(unwrap),
   update: (body) => api.patch('/settings', body).then(unwrap),
   listMethods: () => api.get('/settings/payment-methods').then(unwrap),
+  createMethod: (body) => api.post('/settings/payment-methods', body).then(unwrap),
   updateMethod: (id, body) => api.patch(`/settings/payment-methods/${id}`, body).then(unwrap),
+  deleteMethod: (id) => api.delete(`/settings/payment-methods/${id}`).then(unwrap),
 };
 
 export const reportsApi = {
   financial: (params) => api.get('/reports/financial', { params }).then(unwrap),
+};
+
+export const expensesApi = {
+  categories: (params) => api.get('/expenses/categories', { params }).then(unwrap),
+  createCategory: (body) => api.post('/expenses/categories', body).then(unwrap),
+  updateCategory: (id, body) => api.patch(`/expenses/categories/${id}`, body).then(unwrap),
+  archiveCategory: (id) => api.delete(`/expenses/categories/${id}`).then(unwrap),
+  list: (params) => api.get('/expenses', { params }).then(unwrap),
+  get: (id) => api.get(`/expenses/${id}`).then(unwrap),
+  create: (body) => api.post('/expenses', body).then(unwrap),
+  update: (id, body) => api.patch(`/expenses/${id}`, body).then(unwrap),
+  remove: (id) => api.delete(`/expenses/${id}`).then(unwrap),
+  listRecurring: (params) => api.get('/expenses/recurring', { params }).then(unwrap),
+  getRecurring: (id) => api.get(`/expenses/recurring/${id}`).then(unwrap),
+  createRecurring: (body) => api.post('/expenses/recurring', body).then(unwrap),
+  updateRecurring: (id, body) => api.patch(`/expenses/recurring/${id}`, body).then(unwrap),
+  pauseRecurring: (id) => api.post(`/expenses/recurring/${id}/pause`).then(unwrap),
+  resumeRecurring: (id) => api.post(`/expenses/recurring/${id}/resume`).then(unwrap),
+  deactivateRecurring: (id) => api.post(`/expenses/recurring/${id}/deactivate`).then(unwrap),
 };
 
 export { idempotencyKey };

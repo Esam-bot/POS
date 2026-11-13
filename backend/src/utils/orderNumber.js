@@ -1,31 +1,33 @@
 /**
- * Atomic global daily order numbers: YYMMDD-0001
- * Uses a single sequence row per day (OrderType DINE_IN bucket) so numbers stay unique.
+ * Atomic global sequential order numbers: "1", "2", "3", …
+ * Shared across Dine-in / Takeaway / Delivery. Never resets daily.
+ * Cancelled numbers are not reused (counter only increments).
+ * Historical YYMMDD-#### numbers are left untouched; only new orders use this sequence.
  */
 async function nextOrderNumber(tx) {
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(-2);
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  const dateKey = `${yy}${mm}${dd}`;
-
   await tx.$executeRawUnsafe(
-    `INSERT INTO order_sequences (id, "dateKey", "orderType", "lastValue")
-     VALUES (gen_random_uuid(), $1, 'DINE_IN'::"OrderType", 0)
-     ON CONFLICT ("dateKey", "orderType") DO NOTHING`,
-    dateKey
+    `INSERT INTO order_global_sequences (id, "lastValue")
+     VALUES ('global', 0)
+     ON CONFLICT (id) DO NOTHING`
   );
 
   const rows = await tx.$queryRawUnsafe(
-    `UPDATE order_sequences
+    `UPDATE order_global_sequences
      SET "lastValue" = "lastValue" + 1
-     WHERE "dateKey" = $1 AND "orderType" = 'DINE_IN'::"OrderType"
-     RETURNING "lastValue"`,
-    dateKey
+     WHERE id = 'global'
+     RETURNING "lastValue"`
   );
 
   const lastValue = Number(rows[0].lastValue);
-  return `${dateKey}-${String(lastValue).padStart(4, '0')}`;
+  return String(lastValue);
 }
 
-module.exports = { nextOrderNumber };
+/** Display helper for UI (optional use). */
+function formatOrderNumber(orderNumber) {
+  if (orderNumber == null || orderNumber === '') return '—';
+  const s = String(orderNumber);
+  if (/^\d+$/.test(s)) return `#${s}`;
+  return s.startsWith('#') ? s : s;
+}
+
+module.exports = { nextOrderNumber, formatOrderNumber };

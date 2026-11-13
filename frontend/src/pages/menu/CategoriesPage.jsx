@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Pencil, Plus } from 'lucide-react';
+import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { menuApi, imageSrc } from '../../services/menuService';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../components/ui/Toast';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
+import ConfirmDeleteModal from '../../components/ui/ConfirmDeleteModal';
 import { Field, TextInput, TextArea } from '../../components/ui/Input';
 
 const emptyForm = {
@@ -26,6 +27,8 @@ export default function CategoriesPage() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -110,6 +113,21 @@ export default function CategoriesPage() {
     }
   }
 
+  async function confirmDelete() {
+    if (!deleting) return;
+    setDeleteBusy(true);
+    try {
+      await menuApi.deleteCategory(deleting.id);
+      toast.success('Category deleted');
+      setDeleting(null);
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Delete failed');
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <p className="text-sm text-[var(--color-ink-muted)]">
@@ -180,7 +198,7 @@ export default function CategoriesPage() {
                   </Badge>
                 </td>
                 <td className="px-4 py-3">
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap gap-2">
                     {hasPermission('menu.update') && (
                       <>
                         <Button variant="secondary" onClick={() => openEdit(row)}>
@@ -191,6 +209,12 @@ export default function CategoriesPage() {
                           {row.isActive ? 'Deactivate' : 'Activate'}
                         </Button>
                       </>
+                    )}
+                    {hasPermission('menu.delete') && (
+                      <Button variant="danger" onClick={() => setDeleting(row)}>
+                        <Trash2 size={14} />
+                        Delete
+                      </Button>
                     )}
                   </div>
                 </td>
@@ -239,6 +263,16 @@ export default function CategoriesPage() {
           </div>
         </form>
       </Modal>
+
+      <ConfirmDeleteModal
+        open={Boolean(deleting)}
+        title="Delete category"
+        itemName={deleting?.name}
+        message="Categories with products cannot be deleted — remove or move products first."
+        loading={deleteBusy}
+        onConfirm={confirmDelete}
+        onClose={() => !deleteBusy && setDeleting(null)}
+      />
     </div>
   );
 }

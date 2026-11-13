@@ -7,7 +7,25 @@ function unwrap(res) {
 export const inventoryApi = {
   dashboard: () => api.get('/inventory/dashboard').then(unwrap),
   listUnits: () => api.get('/inventory/units').then(unwrap),
-  listSuppliers: () => api.get('/inventory/suppliers').then(unwrap),
+  listSuppliers: (params) => api.get('/inventory/suppliers', { params }).then(unwrap),
+  getSupplier: (id) => api.get(`/inventory/suppliers/${id}`).then(unwrap),
+  createSupplier: (body) => api.post('/inventory/suppliers', body).then(unwrap),
+  updateSupplier: (id, body) => api.patch(`/inventory/suppliers/${id}`, body).then(unwrap),
+  archiveSupplier: (id) => api.post(`/inventory/suppliers/${id}/archive`).then(unwrap),
+
+  listPurchases: (params) => api.get('/inventory/purchases', { params }).then(unwrap),
+  getPurchase: (id) => api.get(`/inventory/purchases/${id}`).then(unwrap),
+  createPurchase: (body) => api.post('/inventory/purchases', body).then(unwrap),
+  updatePurchase: (id, body) => api.patch(`/inventory/purchases/${id}`, body).then(unwrap),
+  receivePurchase: (id, body) => api.post(`/inventory/purchases/${id}/receive`, body).then(unwrap),
+
+  reportStock: () => api.get('/inventory/reports/stock').then(unwrap),
+  reportLowStock: () => api.get('/inventory/reports/low-stock').then(unwrap),
+  reportConsumption: (params) => api.get('/inventory/reports/consumption', { params }).then(unwrap),
+  reportPurchases: (params) => api.get('/inventory/reports/purchases', { params }).then(unwrap),
+  reportWastage: (params) => api.get('/inventory/reports/wastage', { params }).then(unwrap),
+  reportValuation: () => api.get('/inventory/reports/valuation').then(unwrap),
+
   listMenuProducts: () => api.get('/inventory/menu-products').then(unwrap),
 
   listCategories: (params) => api.get('/inventory/categories', { params }).then(unwrap),
@@ -16,6 +34,7 @@ export const inventoryApi = {
   updateCategory: (id, body) => api.patch(`/inventory/categories/${id}`, body).then(unwrap),
   setCategoryStatus: (id, isActive) =>
     api.patch(`/inventory/categories/${id}/status`, { isActive }).then(unwrap),
+  deleteCategory: (id) => api.delete(`/inventory/categories/${id}`).then(unwrap),
 
   listItems: (params) => api.get('/inventory/items', { params }).then(unwrap),
   getItem: (id) => api.get(`/inventory/items/${id}`).then(unwrap),

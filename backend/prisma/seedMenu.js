@@ -2,7 +2,15 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const http = require('http');
-const { CATEGORIES, MODIFIER_GROUPS, IMAGES, PRODUCTS } = require('./menuCatalog');
+const {
+  CATEGORIES,
+  MODIFIER_GROUPS,
+  IMAGES,
+  PRODUCTS,
+  KEEP_MENU_SKUS,
+  KEEP_MENU_NAMES,
+  KEEP_CATEGORY_NAMES,
+} = require('./menuCatalog');
 
 const UPLOAD_DIR = path.join(__dirname, '..', process.env.UPLOAD_DIR || 'uploads', 'menu');
 
@@ -132,20 +140,62 @@ async function softArchiveTestMenuData(prisma) {
       })
     : { count: 0 };
 
-  // Soft-archive unused starter categories we are replacing (Snacks/Sides/Desserts)
-  const unusedCats = await prisma.menuCategory.updateMany({
-    where: {
-      deletedAt: null,
-      name: { in: ['Snacks', 'Sides', 'Desserts'] },
-    },
-    data: { deletedAt: now, isActive: false },
-  });
-
   return {
-    categories: cats.count + unusedCats.count,
+    categories: cats.count,
     items: itemResult.count,
     modifierGroups: groupResult.count,
   };
+}
+
+/** Soft-archive menu rows that are not part of the minimal seed catalog. */
+async function softArchiveNonCatalogMenu(prisma) {
+  const now = new Date();
+  const items = await prisma.menuItem.findMany({
+    where: { deletedAt: null },
+    select: { id: true, name: true, sku: true },
+  });
+  const dropItemIds = items
+    .filter((i) => !KEEP_MENU_SKUS.has(i.sku) && !KEEP_MENU_NAMES.has(i.name.toLowerCase()))
+    .map((i) => i.id);
+  const itemsArchived = dropItemIds.length
+    ? (
+        await prisma.menuItem.updateMany({
+          where: { id: { in: dropItemIds } },
+          data: { deletedAt: now, isActive: false, isAvailable: false, trackInventory: false },
+        })
+      ).count
+    : 0;
+
+  const cats = await prisma.menuCategory.findMany({
+    where: { deletedAt: null },
+    select: { id: true, name: true },
+  });
+  const dropCatIds = cats
+    .filter((c) => !KEEP_CATEGORY_NAMES.has(c.name.toLowerCase()))
+    .map((c) => c.id);
+  const categoriesArchived = dropCatIds.length
+    ? (
+        await prisma.menuCategory.updateMany({
+          where: { id: { in: dropCatIds } },
+          data: { deletedAt: now, isActive: false },
+        })
+      ).count
+    : 0;
+
+  const groups = await prisma.modifierGroup.findMany({
+    where: { deletedAt: null },
+    select: { id: true },
+  });
+  const modifierGroupsArchived = groups.length
+    ? (
+        await prisma.modifierGroup.updateMany({
+          where: { id: { in: groups.map((g) => g.id) } },
+          data: { deletedAt: now, isActive: false },
+        })
+      ).count
+    : 0;
+
+  return { itemsArchived, categoriesArchived, modifierGroupsArchived };
 }
 
 async function upsertModifierGroup(prisma, def) {
@@ -354,6 +404,8 @@ async function seedCleanMenu(prisma, options = {}) {
       categoryId: category.id,
       kitchenStationId: station?.id || null,
       basePrice: product.basePrice,
+      prepTimeMinutes: product.prepTimeMinutes ?? 5,
+      trackInventory: Boolean(product.trackInventory),
       imageUrl,
       isActive: true,
       isAvailable: true,
@@ -382,12 +434,24 @@ async function seedCleanMenu(prisma, options = {}) {
     console.log(`  product ok: ${product.name}`);
   }
 
-  return { cleaned, productCount: PRODUCTS.length, imageCount: Object.values(imageUrls).filter(Boolean).length };
+  console.log('Archiving menu rows outside the minimal catalog...');
+  const archived = await softArchiveNonCatalogMenu(prisma);
+  console.log(
+    `  archived extras items=${archived.itemsArchived}, categories=${archived.categoriesArchived}, modifierGroups=${archived.modifierGroupsArchived}`
+  );
+
+  return {
+    cleaned,
+    archived,
+    productCount: PRODUCTS.length,
+    imageCount: Object.values(imageUrls).filter(Boolean).length,
+  };
 }
 
 module.exports = {
   seedCleanMenu,
   softArchiveTestMenuData,
+  softArchiveNonCatalogMenu,
   ensureMenuImages,
   isTestName,
 };

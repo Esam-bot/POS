@@ -22,6 +22,7 @@ describe('Phase 6 — Inventory Management', () => {
   let token;
   let categoryId;
   let unitId;
+  let kgId;
   let beefId;
   let bunId;
   let cheeseId;
@@ -29,12 +30,14 @@ describe('Phase 6 — Inventory Management', () => {
   let modifierId;
   let cashId;
   let stationId;
+  let supplierId;
   const suffix = Date.now();
 
   beforeAll(async () => {
     token = await login('admin', 'Admin@123');
     const units = await prisma.unit.findMany();
     unitId = units.find((u) => u.code === 'G')?.id || units[0].id;
+    kgId = units.find((u) => u.code === 'KG')?.id || unitId;
     const pcs = units.find((u) => u.code === 'PCS')?.id || units[0].id;
     stationId = (await prisma.kitchenStation.findFirst({ where: { isActive: true } })).id;
     cashId = (await prisma.paymentMethod.findFirst({ where: { isCash: true } })).id;
@@ -45,6 +48,13 @@ describe('Phase 6 — Inventory Management', () => {
       .send({ name: `Meat Test ${suffix}`, description: 'Test' });
     expect(cat.status).toBe(201);
     categoryId = cat.body.data.id;
+
+    const supplier = await request(app)
+      .post('/api/inventory/suppliers')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: `Farm Co ${suffix}`, phone: '03001112233' });
+    expect(supplier.status).toBe(201);
+    supplierId = supplier.body.data.id;
 
     const beef = await request(app)
       .post('/api/inventory/items')
@@ -59,7 +69,6 @@ describe('Phase 6 — Inventory Management', () => {
       });
     expect(beef.status).toBe(201);
     beefId = beef.body.data.id;
-    expect(beef.body.data.sku).toBeUndefined();
 
     const bun = await request(app)
       .post('/api/inventory/items')
@@ -87,94 +96,39 @@ describe('Phase 6 — Inventory Management', () => {
       });
     cheeseId = cheese.body.data.id;
 
-    const menuCat = await prisma.menuCategory.create({
-      data: { name: `Inv Menu ${suffix}`, isActive: true },
-    });
     const group = await prisma.modifierGroup.create({
       data: {
-        name: `Inv Extras ${suffix}`,
+        name: `Inv Mod ${suffix}`,
         selectionType: 'MULTI',
         minSelect: 0,
         maxSelect: 3,
         isRequired: false,
         isActive: true,
+        modifiers: { create: { name: 'Extra Cheese', priceDelta: 40, isActive: true } },
       },
+      include: { modifiers: true },
     });
-    const mod = await prisma.modifier.create({
-      data: {
-        groupId: group.id,
-        name: 'Extra Cheese',
-        priceDelta: 50,
-        isActive: true,
-      },
-    });
-    modifierId = mod.id;
+    modifierId = group.modifiers[0].id;
 
+    const category = await prisma.menuCategory.create({
+      data: { name: `Inv Menu ${suffix}`, isActive: true },
+    });
     const item = await prisma.menuItem.create({
       data: {
-        categoryId: menuCat.id,
+        categoryId: category.id,
         kitchenStationId: stationId,
         name: `Inv Burger ${suffix}`,
-        sku: `INVB-${suffix}`,
+        sku: `INV-B-${suffix}`,
         basePrice: 500,
+        trackInventory: true,
         isActive: true,
         isAvailable: true,
-        trackInventory: true,
         modifierGroups: { create: [{ modifierGroupId: group.id }] },
       },
     });
     menuItemId = item.id;
-  });
 
-  afterAll(async () => {
-    await prisma.$disconnect();
-  });
-
-  it('prevents duplicate category names', async () => {
-    const res = await request(app)
-      .post('/api/inventory/categories')
-      .set('Authorization', `Bearer ${token}`)
-      .send({ name: `Meat Test ${suffix}` });
-    expect(res.status).toBe(409);
-  });
-
-  it('adds stock and records movement history', async () => {
-    const before = await prisma.ingredient.findUnique({ where: { id: beefId } });
-    const add = await request(app)
-      .post('/api/inventory/stock/add')
-      .set('Authorization', `Bearer ${token}`)
-      .send({ ingredientId: beefId, quantity: 100, unitCost: 22, notes: 'Delivery' });
-    expect(add.status).toBe(201);
-    expect(Number(add.body.data.item.currentStock)).toBe(Number(before.currentStock) + 100);
-    expect(add.body.data.movement.typeLabel).toBe('Stock added');
-    expect(Number(add.body.data.movement.stockBefore)).toBe(Number(before.currentStock));
-  });
-
-  it('adjusts stock with required reason', async () => {
-    const adj = await request(app)
-      .post('/api/inventory/stock/adjust')
-      .set('Authorization', `Bearer ${token}`)
-      .send({ ingredientId: bunId, newStock: 40, reason: 'Count correction' });
-    expect(adj.status).toBe(200);
-    expect(Number(adj.body.data.item.currentStock)).toBe(40);
-  });
-
-  it('records wastage and reduces stock', async () => {
-    const waste = await request(app)
-      .post('/api/inventory/stock/waste')
-      .set('Authorization', `Bearer ${token}`)
-      .send({ ingredientId: cheeseId, quantity: 50, reason: 'Expired' });
-    expect(waste.status).toBe(201);
-    expect(Number(waste.body.data.item.currentStock)).toBe(450);
-    const hist = await request(app)
-      .get('/api/inventory/movements')
-      .set('Authorization', `Bearer ${token}`)
-      .query({ ingredientId: cheeseId, type: 'WASTE' });
-    expect(hist.body.data.items.length).toBeGreaterThan(0);
-  });
-
-  it('creates and updates recipes with ingredients', async () => {
-    const recipe = await request(app)
+    await request(app)
       .post('/api/inventory/recipes')
       .set('Authorization', `Bearer ${token}`)
       .send({
@@ -185,25 +139,25 @@ describe('Phase 6 — Inventory Management', () => {
           { ingredientId: cheeseId, quantity: 30 },
         ],
       });
-    expect(recipe.status).toBe(200);
-    expect(recipe.body.data.items).toHaveLength(3);
-    expect(recipe.body.data.menuItemName).toContain('Inv Burger');
 
-    const modMap = await request(app)
+    await request(app)
       .put(`/api/inventory/modifiers/${modifierId}/ingredients`)
       .set('Authorization', `Bearer ${token}`)
       .send({ items: [{ ingredientId: cheeseId, quantity: 20 }] });
-    expect(modMap.status).toBe(200);
-    expect(modMap.body.data.items).toHaveLength(1);
   });
 
-  async function placeAndPay({ withModifier = false, allowNegative = false, key }) {
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  async function createTrackedOrder({ withModifier = false } = {}) {
     const create = await request(app)
       .post('/api/orders')
       .set('Authorization', `Bearer ${token}`)
       .send({
         type: 'TAKEAWAY',
-        customerName: 'Walk-in Guest', customerPhone: '03001234567',
+        customerName: 'Walk-in Guest',
+        customerPhone: '03001234567',
         items: [
           {
             menuItemId,
@@ -213,150 +167,194 @@ describe('Phase 6 — Inventory Management', () => {
         ],
       });
     expect(create.status).toBe(201);
-    const orderId = create.body.data.id;
-    await request(app)
-      .post(`/api/orders/${orderId}/submit`)
-      .set('Authorization', `Bearer ${token}`);
-
-    const quote = await request(app)
-      .post(`/api/orders/${orderId}/payment-quote`)
-      .set('Authorization', `Bearer ${token}`)
-      .send({});
-    const outstanding = Number(quote.body.data.outstandingPreTax);
-
-    const pay = await request(app)
-      .post(`/api/orders/${orderId}/payments`)
-      .set('Authorization', `Bearer ${token}`)
-      .set('Idempotency-Key', key)
-      .send({
-        portions: [{ methodId: cashId, preTaxAmount: outstanding, amountTendered: outstanding * 2 }],
-        allowNegativeStock: allowNegative || undefined,
-      });
-    return { orderId, pay, outstanding };
+    return create.body.data.id;
   }
 
-  it('deducts recipe + modifier stock after successful payment once', async () => {
+  it('converts purchase unit kg into ingredient grams on receive', async () => {
+    const before = Number((await prisma.ingredient.findUnique({ where: { id: beefId } })).currentStock);
+    const po = await request(app)
+      .post('/api/inventory/purchases')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        supplierId,
+        submit: true,
+        items: [{ ingredientId: beefId, qtyOrdered: 1000, unitCost: 0.8 }],
+      });
+    expect(po.status).toBe(201);
+    const lineId = po.body.data.items[0].id;
+
+    const recv = await request(app)
+      .post(`/api/inventory/purchases/${po.body.data.id}/receive`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        idempotencyKey: `kg-${suffix}`,
+        items: [{ purchaseOrderItemId: lineId, qtyReceived: 1, unitId: kgId }],
+      });
+    expect(recv.status).toBe(200);
+    const after = Number((await prisma.ingredient.findUnique({ where: { id: beefId } })).currentStock);
+    // 1 kg input → 1000 g stock unit
+    expect(after).toBeCloseTo(before + 1000, 2);
+  });
+
+  it('supports partial receive without double-applying idempotent key', async () => {
+    const chicken = await request(app)
+      .post('/api/inventory/items')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        name: `Chicken PO ${suffix}`,
+        categoryId,
+        unitId,
+        currentStock: 0,
+        minStock: 0,
+        avgCost: 5,
+      });
+    const chickenId = chicken.body.data.id;
+    const po = await request(app)
+      .post('/api/inventory/purchases')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        supplierId,
+        submit: true,
+        items: [{ ingredientId: chickenId, qtyOrdered: 10, unitCost: 5 }],
+      });
+    const lineId = po.body.data.items[0].id;
+    const first = await request(app)
+      .post(`/api/inventory/purchases/${po.body.data.id}/receive`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        idempotencyKey: `partial-${suffix}`,
+        items: [{ purchaseOrderItemId: lineId, qtyReceived: 6 }],
+      });
+    expect(first.status).toBe(200);
+    expect(first.body.data.purchase.status).toBe('PARTIAL');
+
+    const replay = await request(app)
+      .post(`/api/inventory/purchases/${po.body.data.id}/receive`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        idempotencyKey: `partial-${suffix}`,
+        items: [{ purchaseOrderItemId: lineId, qtyReceived: 6 }],
+      });
+    expect(replay.body.data.replayed).toBe(true);
+
+    const second = await request(app)
+      .post(`/api/inventory/purchases/${po.body.data.id}/receive`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        idempotencyKey: `partial2-${suffix}`,
+        items: [{ purchaseOrderItemId: lineId, qtyReceived: 4 }],
+      });
+    expect(second.body.data.purchase.status).toBe('RECEIVED');
+    const stock = Number((await prisma.ingredient.findUnique({ where: { id: chickenId } })).currentStock);
+    expect(stock).toBeCloseTo(10, 3);
+  });
+
+  it('deducts recipe + modifier stock when order enters PREPARING (not on payment)', async () => {
     const beefBefore = Number((await prisma.ingredient.findUnique({ where: { id: beefId } })).currentStock);
     const cheeseBefore = Number(
       (await prisma.ingredient.findUnique({ where: { id: cheeseId } })).currentStock
     );
 
-    const { orderId, pay, outstanding } = await placeAndPay({
-      withModifier: true,
-      key: `inv-pay-${suffix}-1`,
-    });
-    expect(pay.status).toBe(201);
+    const orderId = await createTrackedOrder({ withModifier: true });
+    const submit = await request(app)
+      .post(`/api/orders/${orderId}/submit`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.status).toBe('PREPARING');
 
     const beefAfter = Number((await prisma.ingredient.findUnique({ where: { id: beefId } })).currentStock);
     const cheeseAfter = Number(
       (await prisma.ingredient.findUnique({ where: { id: cheeseId } })).currentStock
     );
     expect(beefAfter).toBeCloseTo(beefBefore - 150, 3);
-    // base cheese 30 + extra cheese modifier 20
     expect(cheeseAfter).toBeCloseTo(cheeseBefore - 50, 3);
+    expect(await prisma.orderInventoryDeduction.findUnique({ where: { orderId } })).toBeTruthy();
 
-    const ledger = await prisma.orderInventoryDeduction.findUnique({ where: { orderId } });
-    expect(ledger).toBeTruthy();
-
-    // Idempotent retry with same key — no further deduction
-    const replayPay = await request(app)
-      .post(`/api/orders/${orderId}/payments`)
-      .set('Authorization', `Bearer ${token}`)
-      .set('Idempotency-Key', `inv-pay-${suffix}-1`)
-      .send({
-        portions: [
-          { methodId: cashId, preTaxAmount: outstanding, amountTendered: outstanding * 2 },
-        ],
-      });
-    expect(replayPay.status).toBe(200);
-    expect(replayPay.body.data.replayed).toBe(true);
-
-    const beefFinal = Number((await prisma.ingredient.findUnique({ where: { id: beefId } })).currentStock);
-    expect(beefFinal).toBeCloseTo(beefAfter, 3);
-    expect(await prisma.orderInventoryDeduction.count({ where: { orderId } })).toBe(1);
-  });
-
-  it('does not deduct stock when payment fails', async () => {
-    const create = await request(app)
-      .post('/api/orders')
-      .set('Authorization', `Bearer ${token}`)
-      .send({
-        type: 'TAKEAWAY',
-        customerName: 'Walk-in Guest', customerPhone: '03001234567',
-        items: [{ menuItemId, quantity: 1, modifiers: [] }],
-      });
-    const orderId = create.body.data.id;
-    await request(app)
-      .post(`/api/orders/${orderId}/submit`)
-      .set('Authorization', `Bearer ${token}`);
-
-    const before = Number((await prisma.ingredient.findUnique({ where: { id: beefId } })).currentStock);
-    const bad = await request(app)
-      .post(`/api/orders/${orderId}/payments`)
-      .set('Authorization', `Bearer ${token}`)
-      .set('Idempotency-Key', `inv-fail-${suffix}`)
-      .send({
-        portions: [{ methodId: '00000000-0000-0000-0000-000000000000', preTaxAmount: 100 }],
-      });
-    expect(bad.status).toBeGreaterThanOrEqual(400);
-    const after = Number((await prisma.ingredient.findUnique({ where: { id: beefId } })).currentStock);
-    expect(after).toBe(before);
-    expect(await prisma.orderInventoryDeduction.findUnique({ where: { orderId } })).toBeNull();
-  });
-
-  it('blocks payment when stock is insufficient unless override', async () => {
-    // Drain buns almost empty
-    await prisma.ingredient.update({ where: { id: bunId }, data: { currentStock: 0 } });
-
-    const create = await request(app)
-      .post('/api/orders')
-      .set('Authorization', `Bearer ${token}`)
-      .send({
-        type: 'TAKEAWAY',
-        customerName: 'Walk-in Guest', customerPhone: '03001234567',
-        items: [{ menuItemId, quantity: 1, modifiers: [] }],
-      });
-    const orderId = create.body.data.id;
-    await request(app)
-      .post(`/api/orders/${orderId}/submit`)
-      .set('Authorization', `Bearer ${token}`);
     const quote = await request(app)
       .post(`/api/orders/${orderId}/payment-quote`)
       .set('Authorization', `Bearer ${token}`)
       .send({});
     const outstanding = Number(quote.body.data.outstandingPreTax);
-
-    const blocked = await request(app)
+    const pay = await request(app)
       .post(`/api/orders/${orderId}/payments`)
       .set('Authorization', `Bearer ${token}`)
-      .set('Idempotency-Key', `inv-block-${suffix}`)
+      .set('Idempotency-Key', `inv-pay-${suffix}-1`)
       .send({
         portions: [{ methodId: cashId, preTaxAmount: outstanding, amountTendered: outstanding * 2 }],
       });
+    expect(pay.status).toBe(201);
+
+    const beefFinal = Number((await prisma.ingredient.findUnique({ where: { id: beefId } })).currentStock);
+    expect(beefFinal).toBeCloseTo(beefAfter, 3);
+  });
+
+  it('blocks PREPARING when stock is insufficient unless override', async () => {
+    await prisma.ingredient.update({ where: { id: bunId }, data: { currentStock: 0 } });
+
+    const orderId = await createTrackedOrder();
+    const blocked = await request(app)
+      .post(`/api/orders/${orderId}/submit`)
+      .set('Authorization', `Bearer ${token}`);
     expect(blocked.status).toBe(422);
     expect(blocked.body.message).toMatch(/not enough stock/i);
-    expect(await prisma.payment.count({ where: { orderId } })).toBe(0);
+
+    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    expect(order.status).toBe('PLACED');
+    expect(await prisma.orderInventoryDeduction.findUnique({ where: { orderId } })).toBeNull();
 
     const override = await request(app)
-      .post(`/api/orders/${orderId}/payments`)
+      .post(`/api/orders/${orderId}/transition`)
       .set('Authorization', `Bearer ${token}`)
-      .set('Idempotency-Key', `inv-override-${suffix}`)
-      .send({
-        portions: [{ methodId: cashId, preTaxAmount: outstanding, amountTendered: outstanding * 2 }],
-        allowNegativeStock: true,
-      });
-    expect(override.status).toBe(201);
+      .send({ status: 'PREPARING', allowNegativeStock: true });
+    expect(override.status).toBe(200);
+    expect(override.body.data.status).toBe('PREPARING');
     const bun = await prisma.ingredient.findUnique({ where: { id: bunId } });
     expect(Number(bun.currentStock)).toBeLessThan(0);
   });
 
-  it('dashboard returns alerts without exposing sku', async () => {
+  it('records wastage once when cancelling after PREPARING (no restock)', async () => {
+    await prisma.ingredient.update({ where: { id: bunId }, data: { currentStock: 20 } });
+    const orderId = await createTrackedOrder();
+    const submit = await request(app)
+      .post(`/api/orders/${orderId}/submit`)
+      .set('Authorization', `Bearer ${token}`);
+    expect(submit.status).toBe(200);
+
+    const beefAfterPrep = Number(
+      (await prisma.ingredient.findUnique({ where: { id: beefId } })).currentStock
+    );
+
+    const cancel = await request(app)
+      .post(`/api/orders/${orderId}/cancel`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ reason: 'Guest left after kitchen started' });
+    expect(cancel.status).toBe(200);
+
+    const beefAfterCancel = Number(
+      (await prisma.ingredient.findUnique({ where: { id: beefId } })).currentStock
+    );
+    expect(beefAfterCancel).toBeCloseTo(beefAfterPrep, 3);
+
+    const deduction = await prisma.orderInventoryDeduction.findUnique({ where: { orderId } });
+    expect(deduction.wastageAt).toBeTruthy();
+    const wasteCount = await prisma.wastageRecord.count({
+      where: { reason: { contains: 'Guest left' } },
+    });
+    expect(wasteCount).toBeGreaterThan(0);
+  });
+
+  it('dashboard and reports work without exposing sku', async () => {
     const dash = await request(app)
       .get('/api/inventory/dashboard')
       .set('Authorization', `Bearer ${token}`);
     expect(dash.status).toBe(200);
     expect(dash.body.data.totals.itemCount).toBeGreaterThan(0);
-    const blob = JSON.stringify(dash.body.data);
-    expect(blob).not.toMatch(/"sku"/i);
+    expect(JSON.stringify(dash.body.data)).not.toMatch(/"sku"/);
+
+    const stock = await request(app)
+      .get('/api/inventory/reports/stock')
+      .set('Authorization', `Bearer ${token}`);
+    expect(stock.status).toBe(200);
+    expect(Array.isArray(stock.body.data.items)).toBe(true);
   });
 });

@@ -19,7 +19,12 @@ const ticketInclude = {
       type: true,
       status: true,
       notes: true,
+      customerName: true,
+      customerPhone: true,
       placedAt: true,
+      prepStartedAt: true,
+      estimatedReadyAt: true,
+      readyNotifiedAt: true,
       createdAt: true,
       diningTable: { select: { id: true, number: true, section: true } },
     },
@@ -40,19 +45,45 @@ function stationKeyFor(stationId) {
   return stationId || UNASSIGNED_KEY;
 }
 
+function stationRoom(stationId) {
+  return stationId ? `kitchen:station:${stationId}` : 'kitchen:station:UNASSIGNED';
+}
+
 function mapTicket(ticket) {
   if (!ticket) return null;
   const mapped = serializeDecimals(ticket);
   mapped.stationName = ticket.station?.name || 'Unassigned';
   mapped.stationCode = ticket.station?.code || null;
   mapped.isUnassigned = !ticket.stationId;
+  mapped.orderNumber = ticket.order?.orderNumber || null;
+  mapped.orderType = ticket.order?.type || null;
+  mapped.orderStatus = ticket.order?.status || null;
+  mapped.customerName = ticket.order?.customerName || null;
+  mapped.orderNotes = ticket.order?.notes || null;
+  mapped.tableNumber = ticket.order?.diningTable?.number || null;
+  mapped.tableSection = ticket.order?.diningTable?.section || null;
+  mapped.placedAt = ticket.order?.placedAt || ticket.order?.createdAt || ticket.createdAt;
+  mapped.orderEstimatedReadyAt = ticket.order?.estimatedReadyAt || null;
+
   mapped.items = (ticket.items || []).map((ti) => {
     const oi = ti.orderItem || {};
+    const prepMins = oi.prepTimeMinutesSnapshot ?? 5;
+    const startedAt = ti.preparingAt || oi.prepStartedAt || null;
+    const estimatedReadyAt =
+      oi.estimatedReadyAt ||
+      (startedAt ? new Date(new Date(startedAt).getTime() + prepMins * 60 * 1000) : null);
+    const isDelayed =
+      ['PREPARING', 'NEW', 'ACCEPTED'].includes(ti.status) &&
+      estimatedReadyAt &&
+      new Date(estimatedReadyAt) < new Date() &&
+      !ti.readyAt;
+
     return serializeDecimals({
       id: ti.id,
       ticketId: ti.ticketId,
       orderItemId: ti.orderItemId,
       status: ti.status,
+      acceptedAt: ti.acceptedAt,
       preparingAt: ti.preparingAt,
       readyAt: ti.readyAt,
       completedAt: ti.completedAt,
@@ -60,12 +91,18 @@ function mapTicket(ticket) {
       variantName: oi.variantNameSnapshot || null,
       quantity: oi.quantity,
       specialInstructions: oi.specialInstructions || null,
+      prepTimeMinutes: prepMins,
+      prepStartedAt: startedAt,
+      estimatedReadyAt,
+      isDelayed: Boolean(isDelayed),
       modifiers: (oi.modifiers || []).map((m) => ({
         name: m.nameSnapshot,
         quantity: m.quantity,
       })),
     });
   });
+
+  mapped.hasDelayedItems = mapped.items.some((i) => i.isDelayed);
   return mapped;
 }
 
@@ -87,7 +124,7 @@ function itemTimestampPatch(toStatus, now = new Date()) {
 
 /**
  * Create kitchen tickets for a submitted order (idempotent per order+station).
- * Call inside an existing transaction when possible.
+ * Draft orders are skipped. Call inside an existing transaction when possible.
  */
 async function createTicketsForOrder(tx, orderId) {
   const order = await tx.order.findUnique({
@@ -130,12 +167,20 @@ async function createTicketsForOrder(tx, orderId) {
           })),
           skipDuplicates: true,
         });
-        const refreshed = await tx.kitchenTicket.findUnique({
-          where: { id: existing.id },
-          include: ticketInclude,
-        });
-        created.push(refreshed);
+        // Re-open ticket to NEW if it was READY/COMPLETED but new work arrived
+        if (['READY', 'COMPLETED'].includes(existing.status)) {
+          await tx.kitchenTicket.update({
+            where: { id: existing.id },
+            data: { status: 'NEW', readyAt: null, completedAt: null, servedAt: null },
+          });
+        }
       }
+      // Idempotent: always return the current ticket for this station
+      const refreshed = await tx.kitchenTicket.findUnique({
+        where: { id: existing.id },
+        include: ticketInclude,
+      });
+      if (refreshed) created.push(refreshed);
       continue;
     }
 
@@ -196,10 +241,138 @@ async function cancelTicketsForOrder(tx, orderId) {
   return updated;
 }
 
-async function listBoard(query = {}) {
-  const where = {
-    status: { in: ['NEW', 'ACCEPTED', 'PREPARING', 'READY'] },
-  };
+/**
+ * When all non-cancelled kitchen items for an order are READY/COMPLETED,
+ * promote the restaurant order to READY once (payment stays independent).
+ */
+async function promoteOrderReadyIfKitchenDone(tx, orderId, { userId = null } = {}) {
+  const tickets = await tx.kitchenTicket.findMany({
+    where: { orderId, status: { not: 'CANCELLED' } },
+    include: { items: true },
+  });
+  if (!tickets.length) return null;
+
+  const activeItems = tickets.flatMap((t) =>
+    (t.items || []).filter((i) => i.status !== 'CANCELLED')
+  );
+  if (!activeItems.length) return null;
+  if (!activeItems.every((i) => ['READY', 'COMPLETED'].includes(i.status))) {
+    return null;
+  }
+
+  const order = await tx.order.findUnique({
+    where: { id: orderId },
+    include: {
+      diningTable: { select: { id: true, number: true, section: true } },
+    },
+  });
+  if (!order) return null;
+  if (!['PREPARING', 'CONFIRMED', 'PLACED'].includes(order.status)) return null;
+  if (order.readyNotifiedAt && order.status === 'READY') return null;
+
+  const now = new Date();
+  await tx.orderItem.updateMany({
+    where: { orderId, status: { not: 'CANCELLED' }, prepCompletedAt: null },
+    data: { prepCompletedAt: now, status: 'READY' },
+  });
+
+  const updated = await tx.order.update({
+    where: { id: orderId },
+    data: {
+      status: 'READY',
+      readyNotifiedAt: order.readyNotifiedAt || now,
+      statusHistory: {
+        create: {
+          fromStatus: order.status,
+          toStatus: 'READY',
+          changedById: userId,
+          reason: 'all kitchen stations ready',
+        },
+      },
+    },
+    include: {
+      diningTable: { select: { id: true, number: true, section: true } },
+    },
+  });
+
+  return updated;
+}
+
+function deriveKitchenOverallStatus(items) {
+  const active = (items || []).filter((i) => i.status !== 'CANCELLED');
+  if (!active.length) return 'CANCELLED';
+  if (active.every((i) => i.status === 'COMPLETED')) return 'COMPLETED';
+  if (active.every((i) => ['READY', 'COMPLETED'].includes(i.status))) return 'READY';
+  if (active.some((i) => ['PREPARING', 'READY', 'COMPLETED'].includes(i.status))) {
+    return 'PREPARING';
+  }
+  return 'NEW';
+}
+
+/** Flatten mapped tickets into one card per order, with station sections. */
+function groupTicketsByOrder(mappedTickets) {
+  const byOrder = new Map();
+
+  for (const ticket of mappedTickets) {
+    const orderId = ticket.orderId || ticket.order?.id;
+    if (!orderId) continue;
+
+    if (!byOrder.has(orderId)) {
+      byOrder.set(orderId, {
+        orderId,
+        orderNumber: ticket.orderNumber,
+        orderType: ticket.orderType,
+        orderStatus: ticket.orderStatus,
+        customerName: ticket.customerName,
+        orderNotes: ticket.orderNotes,
+        tableNumber: ticket.tableNumber,
+        tableSection: ticket.tableSection,
+        placedAt: ticket.placedAt,
+        orderEstimatedReadyAt: ticket.orderEstimatedReadyAt,
+        createdAt: ticket.createdAt,
+        stations: [],
+        items: [],
+      });
+    }
+
+    const card = byOrder.get(orderId);
+    const stationItems = (ticket.items || []).filter((i) => i.status !== 'CANCELLED');
+    card.stations.push({
+      ticketId: ticket.id,
+      ticketNumber: ticket.ticketNumber,
+      ticketStatus: ticket.status,
+      stationId: ticket.stationId,
+      stationName: ticket.stationName,
+      stationCode: ticket.stationCode,
+      isUnassigned: ticket.isUnassigned,
+      items: stationItems,
+    });
+    card.items.push(...stationItems);
+  }
+
+  const cards = [];
+  for (const card of byOrder.values()) {
+    // Stable station order by name
+    card.stations.sort((a, b) =>
+      String(a.stationName || '').localeCompare(String(b.stationName || ''))
+    );
+    card.status = deriveKitchenOverallStatus(card.items);
+    card.hasDelayedItems = card.items.some((i) => i.isDelayed);
+    card.itemCount = card.items.length;
+    cards.push(card);
+  }
+
+  cards.sort((a, b) => {
+    const ta = new Date(a.placedAt || a.createdAt || 0).getTime();
+    const tb = new Date(b.placedAt || b.createdAt || 0).getTime();
+    return ta - tb;
+  });
+
+  return cards;
+}
+
+async function listTickets(query = {}) {
+  const where = {};
 
   if (query.stationId === 'UNASSIGNED' || query.unassigned === 'true') {
     where.stationId = null;
@@ -208,8 +381,18 @@ async function listBoard(query = {}) {
   }
 
   if (query.status) {
-    where.status = query.status;
+    const statuses = String(query.status)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    where.status = statuses.length === 1 ? statuses[0] : { in: statuses };
+  } else if (query.includeCompleted === 'true') {
+    where.status = { in: ['NEW', 'ACCEPTED', 'PREPARING', 'READY', 'COMPLETED'] };
+  } else {
+    where.status = { in: ['NEW', 'ACCEPTED', 'PREPARING', 'READY'] };
   }
+
+  where.order = { status: { not: 'DRAFT' } };
 
   const tickets = await prisma.kitchenTicket.findMany({
     where,
@@ -218,6 +401,29 @@ async function listBoard(query = {}) {
   });
 
   return tickets.map(mapTicket);
+}
+
+/** KDS board: one card per order, products grouped by station. */
+async function listBoard(query = {}) {
+  const tickets = await listTickets(query);
+  const cards = groupTicketsByOrder(tickets);
+  if (query.status) {
+    const statuses = String(query.status)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    return cards.filter((c) => statuses.includes(c.status));
+  }
+  return cards;
+}
+
+async function listDelayed(query = {}) {
+  const board = await listBoard({
+    ...query,
+    status: undefined,
+    includeCompleted: 'false',
+  });
+  return board.filter((c) => c.hasDelayedItems && ['NEW', 'PREPARING'].includes(c.status));
 }
 
 async function listHistory(query = {}) {
@@ -254,8 +460,8 @@ async function getTicket(id) {
   return mapTicket(ticket);
 }
 
-async function updateTicketStatus(id, toStatus) {
-  const ticket = await prisma.$transaction(async (tx) => {
+async function updateTicketStatus(id, toStatus, { userId = null } = {}) {
+  const result = await prisma.$transaction(async (tx) => {
     const existing = await tx.kitchenTicket.findUnique({
       where: { id },
       include: { items: true },
@@ -270,7 +476,6 @@ async function updateTicketStatus(id, toStatus) {
       ...ticketTimestampPatch(toStatus, now),
     };
 
-    // Cascade item statuses when advancing the whole ticket
     if (['PREPARING', 'READY', 'COMPLETED', 'CANCELLED'].includes(toStatus)) {
       const itemFrom =
         toStatus === 'PREPARING'
@@ -289,19 +494,51 @@ async function updateTicketStatus(id, toStatus) {
           ...itemTimestampPatch(itemStatus, now),
         },
       });
+
+      if (toStatus === 'PREPARING' || toStatus === 'READY') {
+        const items = await tx.kitchenTicketItem.findMany({
+          where: { ticketId: id, status: itemStatus },
+          select: { orderItemId: true },
+        });
+        const orderItemIds = items.map((i) => i.orderItemId);
+        if (orderItemIds.length) {
+          if (toStatus === 'PREPARING') {
+            await tx.orderItem.updateMany({
+              where: { id: { in: orderItemIds }, prepStartedAt: null },
+              data: { prepStartedAt: now, status: 'PREPARING' },
+            });
+          }
+          if (toStatus === 'READY') {
+            await tx.orderItem.updateMany({
+              where: { id: { in: orderItemIds }, status: { not: 'CANCELLED' } },
+              data: { prepCompletedAt: now, status: 'READY' },
+            });
+          }
+        }
+      }
     }
 
-    return tx.kitchenTicket.update({
+    const ticket = await tx.kitchenTicket.update({
       where: { id },
       data,
       include: ticketInclude,
     });
+
+    let orderReady = null;
+    if (toStatus === 'READY') {
+      orderReady = await promoteOrderReadyIfKitchenDone(tx, existing.orderId, { userId });
+    }
+
+    return { ticket, orderReady };
   });
 
-  return mapTicket(ticket);
+  return {
+    ticket: mapTicket(result.ticket),
+    orderReady: result.orderReady ? serializeDecimals(result.orderReady) : null,
+  };
 }
 
-async function updateItemStatus(itemId, toStatus) {
+async function updateItemStatus(itemId, toStatus, { userId = null } = {}) {
   const result = await prisma.$transaction(async (tx) => {
     const item = await tx.kitchenTicketItem.findUnique({
       where: { id: itemId },
@@ -323,7 +560,25 @@ async function updateItemStatus(itemId, toStatus) {
       },
     });
 
-    // Roll up ticket status from items
+    if (toStatus === 'PREPARING') {
+      await tx.orderItem.updateMany({
+        where: { id: item.orderItemId, prepStartedAt: null },
+        data: { prepStartedAt: now, status: 'PREPARING' },
+      });
+    }
+    if (toStatus === 'READY') {
+      await tx.orderItem.update({
+        where: { id: item.orderItemId },
+        data: { prepCompletedAt: now, status: 'READY' },
+      });
+    }
+    if (toStatus === 'CANCELLED') {
+      await tx.orderItem.update({
+        where: { id: item.orderItemId },
+        data: { status: 'CANCELLED' },
+      });
+    }
+
     const siblings = await tx.kitchenTicketItem.findMany({ where: { ticketId: item.ticketId } });
     let ticketStatus = item.ticket.status;
     const active = siblings.filter((s) => s.status !== 'CANCELLED');
@@ -340,7 +595,6 @@ async function updateItemStatus(itemId, toStatus) {
     }
 
     if (ticketStatus !== item.ticket.status) {
-      // Item-driven rollup may skip intermediate ticket statuses.
       await tx.kitchenTicket.update({
         where: { id: item.ticketId },
         data: {
@@ -350,17 +604,23 @@ async function updateItemStatus(itemId, toStatus) {
       });
     }
 
+    let orderReady = null;
+    if (toStatus === 'READY' || ticketStatus === 'READY') {
+      orderReady = await promoteOrderReadyIfKitchenDone(tx, item.ticket.orderId, { userId });
+    }
+
     const ticket = await tx.kitchenTicket.findUnique({
       where: { id: item.ticketId },
       include: ticketInclude,
     });
 
-    return { item: updatedItem, ticket };
+    return { item: updatedItem, ticket, orderReady };
   });
 
   return {
     item: serializeDecimals(result.item),
     ticket: mapTicket(result.ticket),
+    orderReady: result.orderReady ? serializeDecimals(result.orderReady) : null,
   };
 }
 
@@ -373,16 +633,66 @@ async function listStations() {
   return stations;
 }
 
+async function getWorkload() {
+  const stations = await listStations();
+  const active = await prisma.kitchenTicket.groupBy({
+    by: ['stationId', 'status'],
+    where: { status: { in: ['NEW', 'ACCEPTED', 'PREPARING', 'READY'] } },
+    _count: { _all: true },
+  });
+
+  const byStation = stations.map((s) => {
+    const rows = active.filter((r) => r.stationId === s.id);
+    const countFor = (status) =>
+      rows.filter((r) => r.status === status).reduce((n, r) => n + r._count._all, 0);
+    return {
+      ...s,
+      new: countFor('NEW') + countFor('ACCEPTED'),
+      preparing: countFor('PREPARING'),
+      ready: countFor('READY'),
+      total: rows.reduce((n, r) => n + r._count._all, 0),
+    };
+  });
+
+  const unassignedRows = active.filter((r) => r.stationId == null);
+  if (unassignedRows.length) {
+    byStation.push({
+      id: null,
+      name: 'Unassigned',
+      code: 'UNASSIGNED',
+      new: unassignedRows
+        .filter((r) => ['NEW', 'ACCEPTED'].includes(r.status))
+        .reduce((n, r) => n + r._count._all, 0),
+      preparing: unassignedRows
+        .filter((r) => r.status === 'PREPARING')
+        .reduce((n, r) => n + r._count._all, 0),
+      ready: unassignedRows
+        .filter((r) => r.status === 'READY')
+        .reduce((n, r) => n + r._count._all, 0),
+      total: unassignedRows.reduce((n, r) => n + r._count._all, 0),
+    });
+  }
+
+  return { stations: byStation };
+}
+
 module.exports = {
   UNASSIGNED_KEY,
   createTicketsForOrder,
   cancelTicketsForOrder,
+  promoteOrderReadyIfKitchenDone,
+  listTickets,
   listBoard,
+  listDelayed,
   listHistory,
   getTicket,
   updateTicketStatus,
   updateItemStatus,
   listStations,
+  getWorkload,
   mapTicket,
+  groupTicketsByOrder,
+  deriveKitchenOverallStatus,
   ticketInclude,
+  stationRoom,
 };

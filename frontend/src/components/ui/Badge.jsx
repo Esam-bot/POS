@@ -1,9 +1,9 @@
 const tones = {
-  success: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  warning: 'bg-amber-50 text-amber-700 border-amber-200',
-  danger: 'bg-red-50 text-red-700 border-red-200',
-  muted: 'bg-slate-100 text-slate-600 border-slate-200',
-  brand: 'bg-[var(--color-brand-soft)] text-[var(--color-brand-dark)] border-teal-200',
+  success: 'bg-[var(--color-brand-soft)] text-[var(--color-brand)] border-[color-mix(in_srgb,var(--color-brand)_35%,transparent)]',
+  warning: 'bg-[color-mix(in_srgb,var(--color-warning)_18%,transparent)] text-[var(--color-warning)] border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)]',
+  danger: 'bg-[color-mix(in_srgb,var(--color-danger)_18%,transparent)] text-[var(--color-danger)] border-[color-mix(in_srgb,var(--color-danger)_35%,transparent)]',
+  muted: 'bg-[var(--color-section)] text-[var(--color-ink-muted)] border-[var(--color-line)]',
+  brand: 'bg-[var(--color-brand-soft)] text-[var(--color-brand)] border-[color-mix(in_srgb,var(--color-brand)_35%,transparent)]',
 };
 
 export default function Badge({ children, tone = 'muted' }) {

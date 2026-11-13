@@ -7,4 +7,7 @@ function unwrap(res) {
 export const customersApi = {
   search: (q, params = {}) =>
     api.get('/customers/search', { params: { q, ...params } }).then(unwrap),
+
+  saveDefaultAddress: (customerId, body) =>
+    api.put(`/customers/${customerId}/default-address`, body).then(unwrap),
 };

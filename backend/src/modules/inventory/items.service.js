@@ -53,20 +53,70 @@ async function listItems(query) {
   }
   if (query.categoryId) where.categoryId = query.categoryId;
 
-  let rows = await prisma.ingredient.findMany({
-    where,
-    include: itemInclude,
-    orderBy: { name: 'asc' },
-  });
-
-  if (query.stockStatus) {
-    rows = rows.filter((r) => stockStatus(r) === query.stockStatus);
+  // Stock filters that need column-vs-column comparison use SQL on the server.
+  if (query.stockStatus === 'OUT_OF_STOCK') {
+    where.currentStock = { lte: 0 };
+  } else if (query.stockStatus === 'LOW_STOCK' || query.stockStatus === 'IN_STOCK') {
+    const params = [];
+    const clauses = [`"deletedAt" IS NULL`];
+    if (query.search) {
+      params.push(`%${query.search}%`);
+      clauses.push(`name ILIKE $${params.length}`);
+    }
+    if (query.isActive === true || query.isActive === 'true') {
+      clauses.push(`"isActive" = true`);
+    } else if (query.isActive === false || query.isActive === 'false') {
+      clauses.push(`"isActive" = false`);
+    }
+    if (query.categoryId) {
+      params.push(query.categoryId);
+      clauses.push(`"categoryId" = $${params.length}::uuid`);
+    }
+    if (query.stockStatus === 'LOW_STOCK') {
+      clauses.push(`"currentStock" > 0 AND "minStock" > 0 AND "currentStock" <= "minStock"`);
+    } else {
+      clauses.push(
+        `(("minStock" <= 0 AND "currentStock" > 0) OR ("minStock" > 0 AND "currentStock" > "minStock"))`
+      );
+    }
+    const idRows = await prisma.$queryRawUnsafe(
+      `SELECT id FROM ingredients WHERE ${clauses.join(' AND ')} ORDER BY name ASC`,
+      ...params
+    );
+    const ids = idRows.map((r) => r.id);
+    const total = ids.length;
+    const pageIds = ids.slice(skip, skip + limit);
+    if (!pageIds.length) return paginatedResult([], total, page, limit);
+    const rows = await prisma.ingredient.findMany({
+      where: { id: { in: pageIds } },
+      include: itemInclude,
+    });
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    const ordered = pageIds.map((id) => byId[id]).filter(Boolean);
+    return paginatedResult(
+      ordered.map((r) => serializeDecimals(presentIngredient(r))),
+      total,
+      page,
+      limit
+    );
   }
 
-  const total = rows.length;
-  const pageRows = rows.slice(skip, skip + limit);
-  const items = pageRows.map((r) => serializeDecimals(presentIngredient(r)));
-  return paginatedResult(items, total, page, limit);
+  const [total, rows] = await Promise.all([
+    prisma.ingredient.count({ where }),
+    prisma.ingredient.findMany({
+      where,
+      include: itemInclude,
+      orderBy: { name: 'asc' },
+      skip,
+      take: limit,
+    }),
+  ]);
+  return paginatedResult(
+    rows.map((r) => serializeDecimals(presentIngredient(r))),
+    total,
+    page,
+    limit
+  );
 }
 
 async function getItem(id) {
@@ -89,6 +139,7 @@ async function createItem(data) {
     data: {
       name: data.name.trim(),
       sku,
+      description: data.description || null,
       categoryId: data.categoryId,
       unitId: data.unitId,
       supplierId: data.supplierId || null,
@@ -116,6 +167,7 @@ async function updateItem(id, data) {
     where: { id },
     data: {
       ...(data.name !== undefined ? { name: data.name.trim() } : {}),
+      ...(data.description !== undefined ? { description: data.description || null } : {}),
       ...(data.categoryId !== undefined ? { categoryId: data.categoryId } : {}),
       ...(data.unitId !== undefined ? { unitId: data.unitId } : {}),
       ...(data.supplierId !== undefined ? { supplierId: data.supplierId || null } : {}),
@@ -156,7 +208,13 @@ async function archiveItem(id) {
 
 async function listUnits() {
   const units = await prisma.unit.findMany({ orderBy: { name: 'asc' } });
-  return units.map((u) => ({ id: u.id, name: u.name, code: u.code }));
+  return units.map((u) => ({
+    id: u.id,
+    name: u.name,
+    code: u.code,
+    dimension: u.dimension,
+    toBaseFactor: u.toBaseFactor,
+  }));
 }
 
 async function listSuppliersLite() {

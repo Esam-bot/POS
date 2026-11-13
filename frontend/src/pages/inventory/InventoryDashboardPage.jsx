@@ -32,6 +32,27 @@ export default function InventoryDashboardPage() {
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap gap-2">
+        <Link
+          to="/admin/inventory/items"
+          className="rounded-lg bg-[var(--color-brand)] px-3 py-2 text-sm font-medium text-white"
+        >
+          Add ingredient
+        </Link>
+        <Link
+          to="/admin/inventory/purchases"
+          className="rounded-lg bg-[var(--color-brand-soft)] px-3 py-2 text-sm font-medium text-[var(--color-brand-dark)]"
+        >
+          Record purchase
+        </Link>
+        <Link
+          to="/admin/inventory/stock"
+          className="rounded-lg border border-[var(--color-line)] bg-white px-3 py-2 text-sm font-medium"
+        >
+          Adjust stock
+        </Link>
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Active items" value={t.itemCount} />
         <Stat label="Stock value" value={money(t.stockValue)} hint="Based on average cost" />

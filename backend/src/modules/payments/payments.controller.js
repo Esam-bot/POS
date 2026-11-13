@@ -4,7 +4,6 @@ const billing = require('../billing/billing.service');
 const AppError = require('../../utils/AppError');
 const { success } = require('../../utils/apiResponse');
 const { emitEvent } = require('../../sockets/emit');
-const { emitAutoReleaseEvents } = require('../../sockets/emitAutoRelease');
 
 async function quote(req, res, next) {
   try {
@@ -36,7 +35,6 @@ async function createPayments(req, res, next) {
         jobs: data.printJobs,
       });
     }
-    emitAutoReleaseEvents(req, data.autoRelease);
     return success(
       res,
       data.replayed ? 'Payment already recorded' : 'Payment recorded',
@@ -87,7 +85,6 @@ async function createRefund(req, res, next) {
       canApprove
     );
     emitEvent(req, 'payment.refunded', data);
-    emitAutoReleaseEvents(req, data.autoRelease);
     return success(
       res,
       data.replayed ? 'Refund already recorded' : 'Refund recorded',
@@ -148,7 +145,6 @@ async function settle(req, res, next) {
       req.user.id
     );
     emitEvent(req, 'order.settled', data);
-    emitAutoReleaseEvents(req, data.autoRelease);
     return success(res, `Order marked ${req.body.status}`, data);
   } catch (err) {
     next(err);

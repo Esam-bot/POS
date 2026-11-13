@@ -1,15 +1,31 @@
 const prisma = require('../../config/db');
+const AppError = require('../../utils/AppError');
 const { serializeDecimals } = require('../../utils/decimal');
 const { D, money2 } = require('../../utils/moneyMath');
+const { expenseTotalsForRange } = require('../expenses/expenses.service');
 
+/**
+ * Inclusive calendar-day filter on createdAt (timestamptz).
+ * From = start of day; To = end of day.
+ * No dates → empty filter (existing default: all records).
+ */
 function dateFilter(query) {
-  const where = {};
-  if (query.from || query.to) {
-    where.createdAt = {};
-    if (query.from) where.createdAt.gte = new Date(query.from);
-    if (query.to) where.createdAt.lte = new Date(query.to);
+  if (!query.from && !query.to) return {};
+  if (query.from && query.to && query.from > query.to) {
+    throw new AppError('From date must not be later than To date', 400);
   }
-  return where;
+  const range = {};
+  if (query.from) {
+    const start = new Date(query.from);
+    start.setHours(0, 0, 0, 0);
+    range.gte = start;
+  }
+  if (query.to) {
+    const end = new Date(query.to);
+    end.setHours(23, 59, 59, 999);
+    range.lte = end;
+  }
+  return { createdAt: range };
 }
 
 async function financialSummary(query = {}) {
@@ -139,6 +155,9 @@ async function financialSummary(query = {}) {
     D(0)
   );
 
+  const expenseTotals = await expenseTotalsForRange(query);
+  const remainingAfterExpenses = money2(D(totalCollections).minus(expenseTotals.total));
+
   return serializeDecimals({
     sales: {
       grossSales,
@@ -154,11 +173,6 @@ async function financialSummary(query = {}) {
     },
     payments: {
       byMethod: collectionsByMethod,
-      cash: collectionsByMethod.CASH || 0,
-      card: collectionsByMethod.CARD || 0,
-      bankTransfer: collectionsByMethod.BANK_TRANSFER || 0,
-      easypaisa: collectionsByMethod.EASYPAISA || 0,
-      jazzcash: collectionsByMethod.JAZZCASH || 0,
       totalCollections,
       outstandingBalance,
       outstandingCount: outstandingOrders.length,
@@ -169,7 +183,21 @@ async function financialSummary(query = {}) {
       voids: refundsByType.VOID_AFTER_PAYMENT,
       total: refundTotal,
     },
+    expenses: {
+      total: expenseTotals.total,
+      byCategory: expenseTotals.byCategory,
+    },
+    overview: {
+      grossSales,
+      discounts,
+      netSales,
+      taxCollected: totalTax,
+      netPaymentsCollected: totalCollections,
+      totalRefunds: refundTotal,
+      totalExpenses: expenseTotals.total,
+      remainingAfterExpenses,
+    },
   });
 }
 
-module.exports = { financialSummary };
+module.exports = { financialSummary, dateFilter };

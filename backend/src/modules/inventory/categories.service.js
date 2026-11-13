@@ -126,10 +126,30 @@ async function setCategoryStatus(id, isActive) {
   return updateCategory(id, { isActive });
 }
 
+async function softDeleteCategory(id) {
+  const existing = await prisma.inventoryCategory.findFirst({
+    where: { id, deletedAt: null },
+    include: { _count: { select: { ingredients: { where: { deletedAt: null } } } } },
+  });
+  if (!existing) throw new AppError('Category not found', 404);
+  if (existing._count.ingredients > 0) {
+    throw new AppError(
+      'Cannot delete category that has ingredients. Move or delete ingredients first, or deactivate the category.',
+      409
+    );
+  }
+  await prisma.inventoryCategory.update({
+    where: { id },
+    data: { deletedAt: new Date(), isActive: false },
+  });
+  return { deleted: true, id, name: existing.name };
+}
+
 module.exports = {
   listCategories,
   getCategory,
   createCategory,
   updateCategory,
   setCategoryStatus,
+  softDeleteCategory,
 };

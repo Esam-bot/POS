@@ -7,7 +7,17 @@ export function ToastProvider({ children }) {
 
   const push = useCallback((message, tone = 'info') => {
     const id = crypto.randomUUID();
-    setToasts((prev) => [...prev, { id, message, tone }]);
+    // Always coerce to string — rendering a Zod/errors object as a React child
+    // throws and whitescreens the app.
+    const text =
+      typeof message === 'string'
+        ? message
+        : message == null
+          ? 'Something went wrong'
+          : typeof message === 'object'
+            ? message.message || JSON.stringify(message)
+            : String(message);
+    setToasts((prev) => [...prev, { id, message: text, tone }]);
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 3200);

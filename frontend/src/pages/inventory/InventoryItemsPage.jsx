@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { inventoryApi, qty, stockTone } from '../../services/inventoryService';
 import { money } from '../../utils/formatMoney';
 import { useAuth } from '../../context/AuthContext';
@@ -7,6 +7,7 @@ import { useToast } from '../../components/ui/Toast';
 import Badge from '../../components/ui/Badge';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
+import ConfirmDeleteModal from '../../components/ui/ConfirmDeleteModal';
 import { Field, TextInput, Select } from '../../components/ui/Input';
 
 const empty = {
@@ -34,16 +35,18 @@ export default function InventoryItemsPage() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(empty);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const loadMeta = useCallback(async () => {
     const [cats, u, s] = await Promise.all([
       inventoryApi.listCategories({ limit: 100, isActive: true }),
       inventoryApi.listUnits(),
-      inventoryApi.listSuppliers(),
+      inventoryApi.listSuppliers({ limit: 100, isActive: true }),
     ]);
     setCategories(cats.items);
     setUnits(u);
-    setSuppliers(s);
+    setSuppliers(s.items || s || []);
   }, []);
 
   const load = useCallback(async () => {
@@ -129,16 +132,18 @@ export default function InventoryItemsPage() {
     }
   }
 
-  async function archive(row) {
-    if (!window.confirm(`Deactivate “${row.name}”? Items with history cannot be permanently deleted.`)) {
-      return;
-    }
+  async function confirmDelete() {
+    if (!deleting) return;
+    setDeleteBusy(true);
     try {
-      await inventoryApi.archiveItem(row.id);
-      toast.success('Item deactivated');
+      await inventoryApi.archiveItem(deleting.id);
+      toast.success('Ingredient deleted');
+      setDeleting(null);
       load();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Archive failed');
+      toast.error(err.response?.data?.message || 'Delete failed');
+    } finally {
+      setDeleteBusy(false);
     }
   }
 
@@ -202,8 +207,9 @@ export default function InventoryItemsPage() {
                       <Button variant="secondary" onClick={() => openEdit(row)}>
                         Edit
                       </Button>
-                      <Button variant="secondary" onClick={() => archive(row)}>
-                        Deactivate
+                      <Button variant="danger" onClick={() => setDeleting(row)}>
+                        <Trash2 size={14} />
+                        Delete
                       </Button>
                     </>
                   )}
@@ -321,6 +327,16 @@ export default function InventoryItemsPage() {
           </div>
         </form>
       </Modal>
+
+      <ConfirmDeleteModal
+        open={Boolean(deleting)}
+        title="Delete ingredient"
+        itemName={deleting?.name}
+        message="Ingredients with stock history are soft-deleted and hidden from lists."
+        loading={deleteBusy}
+        onConfirm={confirmDelete}
+        onClose={() => !deleteBusy && setDeleting(null)}
+      />
     </div>
   );
 }

@@ -1,3 +1,5 @@
+import { formatOrderNumber } from '../../utils/orderNumber';
+
 export default function KitchenTicketPrint({ snapshot, isReprint = false }) {
   if (!snapshot) return null;
   const order = snapshot.order || {};
@@ -10,17 +12,19 @@ export default function KitchenTicketPrint({ snapshot, isReprint = false }) {
       )}
       <header className="border-b-2 border-black pb-3 text-center">
         <p className="text-xs font-semibold tracking-wide">KITCHEN ORDER</p>
-        <h1 className="mt-1 text-2xl font-black tracking-tight">ORDER #{order.orderNumber}</h1>
-        <p className="mt-2 text-base font-bold">
-          {order.typeLabel || 'ORDER'}
-          {order.table ? ` — ${order.table}` : ''}
-        </p>
+        <h1 className="mt-1 text-2xl font-black tracking-tight">
+          ORDER {formatOrderNumber(order.orderNumber)}
+        </h1>
+        <p className="mt-2 text-base font-bold">{order.typeLabel || 'ORDER'}</p>
+        {order.type === 'DELIVERY' ? (
+          <p className="mt-1 text-sm font-black uppercase tracking-wide">*** DELIVERY ***</p>
+        ) : null}
         <p className="mt-1 text-sm font-bold uppercase">
           Guest: {order.customerName || '—'}
         </p>
-        {order.tableSection && (
-          <p className="text-xs font-medium">{order.tableSection}</p>
-        )}
+        {order.type === 'DELIVERY' && order.customerPhone ? (
+          <p className="text-xs font-semibold">Phone: {order.customerPhone}</p>
+        ) : null}
         <p className="mt-1 text-sm font-semibold">
           {order.placedAt
             ? new Date(order.placedAt).toLocaleTimeString([], {

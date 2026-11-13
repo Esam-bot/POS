@@ -13,8 +13,6 @@ async function getSettings() {
       taxServiceCharge: false,
       taxDeliveryFee: false,
       allowPartialPayments: true,
-      autoReleaseTableOnPayment: true,
-      useCleaningStatus: false,
       serviceChargeValue: D(0),
       serviceChargeType: 'PERCENT',
     };

@@ -39,11 +39,13 @@ function presentIngredient(row) {
   return {
     id: row.id,
     name: row.name,
+    description: row.description || null,
     categoryId: row.categoryId,
     categoryName: row.category?.name || null,
     unitId: row.unitId,
     unitName: row.unit?.name || null,
     unitCode: row.unit?.code || null,
+    unitDimension: row.unit?.dimension || null,
     supplierId: row.supplierId || null,
     supplierName: row.supplier?.name || null,
     currentStock: row.currentStock,

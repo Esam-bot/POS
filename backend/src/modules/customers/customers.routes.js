@@ -12,4 +12,10 @@ router.get(
   controller.search
 );
 
+router.put(
+  '/:id/default-address',
+  authorizeAny('customers.manage', 'pos.access', 'orders.create'),
+  controller.saveDefaultAddress
+);
+
 module.exports = router;

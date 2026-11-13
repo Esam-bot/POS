@@ -39,6 +39,7 @@ const statusBody = z.object({
 
 const itemCreate = z.object({
   name: z.string().trim().min(1).max(160),
+  description: z.string().trim().max(500).optional().nullable(),
   categoryId: z.string().uuid(),
   unitId: z.string().uuid(),
   supplierId: z.string().uuid().optional().nullable(),
@@ -50,6 +51,7 @@ const itemCreate = z.object({
 
 const itemUpdate = z.object({
   name: z.string().trim().min(1).max(160).optional(),
+  description: z.string().trim().max(500).optional().nullable(),
   categoryId: z.string().uuid().optional(),
   unitId: z.string().uuid().optional(),
   supplierId: z.string().uuid().optional().nullable(),
@@ -61,8 +63,53 @@ const itemUpdate = z.object({
 const stockAdd = z.object({
   ingredientId: z.string().uuid(),
   quantity: qty,
+  unitId: z.string().uuid().optional().nullable(),
   unitCost: nonNeg.optional().nullable(),
   notes: z.string().trim().max(500).optional().nullable(),
+});
+
+const supplierCreate = z.object({
+  name: z.string().trim().min(1).max(160),
+  contactPerson: z.string().trim().max(120).optional().nullable(),
+  phone: z.string().trim().max(40).optional().nullable(),
+  email: z.string().trim().email().optional().nullable().or(z.literal('')),
+  address: z.string().trim().max(500).optional().nullable(),
+  isActive: z.boolean().optional(),
+});
+
+const supplierUpdate = supplierCreate.partial();
+
+const purchaseCreate = z.object({
+  supplierId: z.string().uuid(),
+  notes: z.string().trim().max(500).optional().nullable(),
+  submit: z.boolean().optional(),
+  items: z
+    .array(
+      z.object({
+        ingredientId: z.string().uuid(),
+        qtyOrdered: qty,
+        unitCost: nonNeg,
+      })
+    )
+    .min(1),
+});
+
+const purchaseUpdate = z.object({
+  status: z.enum(['ORDERED', 'CANCELLED']).optional(),
+  notes: z.string().trim().max(500).optional().nullable(),
+});
+
+const purchaseReceive = z.object({
+  idempotencyKey: z.string().trim().min(4).max(120).optional().nullable(),
+  items: z
+    .array(
+      z.object({
+        purchaseOrderItemId: z.string().uuid(),
+        qtyReceived: qty,
+        unitId: z.string().uuid().optional().nullable(),
+      })
+    )
+    .min(1),
 });
 
 const stockAdjust = z.object({
@@ -107,4 +154,9 @@ module.exports = {
   stockWaste,
   recipeUpsert,
   modifierIngredientUpsert,
+  supplierCreate,
+  supplierUpdate,
+  purchaseCreate,
+  purchaseUpdate,
+  purchaseReceive,
 };

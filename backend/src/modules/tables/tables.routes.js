@@ -18,5 +18,6 @@ router.patch(
   validate(schemas.statusBody),
   controller.setStatus
 );
+router.delete('/:id', authorize('tables.manage'), controller.remove);
 
 module.exports = router;

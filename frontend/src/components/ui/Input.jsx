@@ -1,5 +1,5 @@
 const controlBase =
-  'w-full min-h-[var(--control-height)] rounded-[var(--radius-control)] border border-[var(--color-line)] bg-white px-3 py-2 text-[15px] text-[var(--color-ink)] placeholder:text-[#8b93a7] outline-none transition focus:border-[var(--color-brand)] focus:ring-2 focus:ring-[var(--color-brand)]/25 disabled:cursor-not-allowed disabled:bg-[var(--color-surface)] disabled:text-[var(--color-ink-muted)]';
+  'w-full min-h-[var(--control-height)] rounded-[var(--radius-control)] border border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2 text-[15px] text-[var(--color-ink)] placeholder:text-[var(--color-ink-muted)] outline-none transition focus:border-[var(--color-brand)] focus:ring-2 focus:ring-[var(--color-brand)]/25 disabled:cursor-not-allowed disabled:bg-[var(--color-section)] disabled:text-[var(--color-ink-muted)]';
 
 export function Field({ label, children, hint, required }) {
   return (

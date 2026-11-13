@@ -19,7 +19,6 @@ export default function CustomerReceiptPrint({ snapshot, isReprint = false }) {
         <p className="mt-2 text-sm font-semibold">ORDER {order.orderNumber}</p>
         <p className="text-[11px]">
           {order.typeLabel || order.type}
-          {order.table ? ` · Table ${order.table}` : ''}
         </p>
         <p className="text-[11px]">
           {order.placedAt ? new Date(order.placedAt).toLocaleString() : ''}
@@ -29,6 +28,19 @@ export default function CustomerReceiptPrint({ snapshot, isReprint = false }) {
         </p>
         {order.customerPhone ? (
           <p className="text-[11px]">Phone: {order.customerPhone}</p>
+        ) : null}
+        {order.type === 'DELIVERY' && (order.deliveryAddress || order.deliveryAddressSnapshot) ? (
+          <>
+            <p className="mt-1 text-[11px] font-semibold">
+              Address:{' '}
+              {(order.deliveryAddress || order.deliveryAddressSnapshot).line1 || '—'}
+            </p>
+            {(order.deliveryAddress || order.deliveryAddressSnapshot).city ? (
+              <p className="text-[11px]">
+                Area: {(order.deliveryAddress || order.deliveryAddressSnapshot).city}
+              </p>
+            ) : null}
+          </>
         ) : null}
         {order.cashier && <p className="text-[11px]">Cashier: {order.cashier}</p>}
       </header>

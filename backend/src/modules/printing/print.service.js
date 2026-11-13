@@ -5,7 +5,6 @@ const { serializeDecimals } = require('../../utils/decimal');
 const billing = require('../billing/billing.service');
 
 const orderPrintInclude = {
-  diningTable: { select: { number: true, section: true } },
   createdBy: { select: { name: true } },
   customer: { select: { name: true, phone: true } },
   items: {
@@ -78,8 +77,6 @@ async function buildSnapshots(orderId) {
     type: order.type,
     typeLabel: orderTypeLabel(order.type),
     paymentStatus: order.paymentStatus,
-    table: order.diningTable?.number || null,
-    tableSection: order.diningTable?.section || null,
     cashier: order.createdBy?.name || null,
     placedAt: order.placedAt || order.createdAt,
     notes: order.notes || null,
@@ -161,8 +158,6 @@ async function buildSnapshots(orderId) {
     order: {
       orderNumber: baseMeta.orderNumber,
       typeLabel: baseMeta.typeLabel,
-      table: baseMeta.table,
-      tableSection: baseMeta.tableSection,
       placedAt: baseMeta.placedAt,
       notes: baseMeta.notes,
       customerName: guestName,

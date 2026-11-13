@@ -4,6 +4,8 @@ const AppError = require('../../utils/AppError');
 const { parsePagination, paginatedResult } = require('../../utils/pagination');
 const { serializeDecimals } = require('../../utils/decimal');
 const { toNum, txnTypeLabel, presentIngredient } = require('./stockStatus');
+const { toIngredientUnit } = require('./units');
+const { syncLowStockNotification } = require('./lowStockNotify');
 
 function D(v) {
   return new Prisma.Decimal(v);
@@ -57,11 +59,23 @@ async function resolveOrderNumbers(txns) {
   }));
 }
 
-async function addStock(body, userId) {
-  const quantity = D(body.quantity);
+async function addStock(body, userId, appOrReq = null) {
+  let quantity = D(body.quantity);
   const unitCost = body.unitCost != null ? D(body.unitCost) : null;
 
   const result = await prisma.$transaction(async (tx) => {
+    const full = await tx.ingredient.findFirst({
+      where: { id: body.ingredientId, deletedAt: null },
+      include: { unit: true },
+    });
+    if (!full) throw new AppError('Inventory item not found', 404);
+
+    if (body.unitId && body.unitId !== full.unitId) {
+      const inputUnit = await tx.unit.findUnique({ where: { id: body.unitId } });
+      if (!inputUnit) throw new AppError('Unit not found', 404);
+      quantity = toIngredientUnit(quantity, inputUnit, full.unit);
+    }
+
     const ing = await lockIngredient(tx, body.ingredientId);
     const before = D(ing.currentStock);
     const after = before.add(quantity);
@@ -109,13 +123,15 @@ async function addStock(body, userId) {
     return { item: updated, txn };
   });
 
+  if (appOrReq) await syncLowStockNotification(appOrReq, body.ingredientId);
+
   return serializeDecimals({
     item: presentIngredient(result.item),
     movement: presentMovement(result.txn),
   });
 }
 
-async function adjustStock(body, userId) {
+async function adjustStock(body, userId, appOrReq = null) {
   const newStock = D(body.newStock);
   const result = await prisma.$transaction(async (tx) => {
     const ing = await lockIngredient(tx, body.ingredientId);
@@ -158,13 +174,15 @@ async function adjustStock(body, userId) {
     return { item: updated, txn };
   });
 
+  if (appOrReq) await syncLowStockNotification(appOrReq, body.ingredientId);
+
   return serializeDecimals({
     item: presentIngredient(result.item),
     movement: presentMovement(result.txn),
   });
 }
 
-async function recordWastage(body, userId) {
+async function recordWastage(body, userId, appOrReq = null) {
   const quantity = D(body.quantity);
   const result = await prisma.$transaction(async (tx) => {
     const ing = await lockIngredient(tx, body.ingredientId);
@@ -220,6 +238,8 @@ async function recordWastage(body, userId) {
 
     return { item: updated, txn };
   });
+
+  if (appOrReq) await syncLowStockNotification(appOrReq, body.ingredientId);
 
   return serializeDecimals({
     item: presentIngredient(result.item),

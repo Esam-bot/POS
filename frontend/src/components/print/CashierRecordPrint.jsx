@@ -20,7 +20,6 @@ export default function CashierRecordPrint({ snapshot, isReprint = false }) {
         <p className="mt-2 text-sm font-semibold">ORDER {order.orderNumber}</p>
         <p className="text-[11px]">
           {order.typeLabel || order.type}
-          {order.table ? ` · Table ${order.table}` : ''}
         </p>
         <p className="text-[11px]">
           {order.placedAt ? new Date(order.placedAt).toLocaleString() : ''}

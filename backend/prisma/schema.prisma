@@ -149,6 +149,23 @@ enum OutboxStatus {
   FAILED
 }
 
+enum ExpensePaymentStatus {
+  UNPAID
+  PAID
+}
+
+enum RecurringExpenseFrequency {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum RecurringExpenseStatus {
+  ACTIVE
+  PAUSED
+  INACTIVE
+}
+
 // ─── Auth & organization ─────────────────────────────────────────────────────
 
 model User {
@@ -171,8 +188,11 @@ model User {
   refundsAuthorized   Refund[]             @relation("RefundAuthorizedBy")
   inventoryTxns       InventoryTransaction[]
   wastageRecords      WastageRecord[]
-  expensesRecorded    Expense[]
-  auditLogs           AuditLog[]
+  expensesRecorded           Expense[]          @relation("ExpenseRecordedBy")
+  expensesUpdated            Expense[]          @relation("ExpenseUpdatedBy")
+  recurringExpensesCreated   RecurringExpense[] @relation("RecurringExpenseCreatedBy")
+  recurringExpensesUpdated   RecurringExpense[] @relation("RecurringExpenseUpdatedBy")
+  auditLogs                  AuditLog[]
   purchaseOrders      PurchaseOrder[]      @relation("PurchaseCreatedBy")
   sessionsOpened      TableSession[]       @relation("SessionOpenedBy")
   settlementsApproved Order[]              @relation("OrderSettlementBy")
@@ -287,9 +307,14 @@ model RestaurantSettings {
   receiptFooter        String?
   allowPartialPayments Boolean           @default(true)
   /// When true, fully settled dine-in sessions auto-complete orders and free tables.
-  autoReleaseTableOnPayment Boolean      @default(true)
+  autoReleaseTableOnPayment Boolean      @default(false)
   /// When true, auto-release sets tables to CLEANING instead of AVAILABLE.
   useCleaningStatus    Boolean           @default(false)
+  /// Minutes a table stays CLEANING before auto-returning to AVAILABLE.
+  tableCleaningMinutes Int               @default(2)
+  /// When true, opsWorker may mark PREPARING → READY when prep estimates elapse.
+  /// Default false: kitchen staff must confirm readiness on the KDS.
+  autoReadyOnEstimate  Boolean           @default(false)
   createdAt            DateTime          @default(now()) @db.Timestamptz
   updatedAt            DateTime          @updatedAt @db.Timestamptz
 
@@ -310,6 +335,8 @@ model DiningTable {
   status            TableStatus @default(AVAILABLE)
   isActive          Boolean     @default(true)
   mergedIntoTableId String?     @db.Uuid
+  /// Set when status becomes CLEANING; worker uses this for auto-AVAILABLE.
+  cleaningStartedAt DateTime?   @db.Timestamptz
   deletedAt         DateTime?   @db.Timestamptz
   createdAt         DateTime    @default(now()) @db.Timestamptz
   updatedAt         DateTime    @updatedAt @db.Timestamptz
@@ -440,6 +467,8 @@ model MenuItem {
   sku              String    @unique
   imageUrl         String?
   basePrice        Decimal   @db.Decimal(12, 2)
+  /// Estimated kitchen prep time in minutes (copied onto order items at order time).
+  prepTimeMinutes  Int       @default(5)
   isAvailable      Boolean   @default(true)
   isActive         Boolean   @default(true)
   trackInventory   Boolean   @default(false)
@@ -561,6 +590,11 @@ model Order {
   settlementAt             DateTime?     @db.Timestamptz
   settlementById           String?       @db.Uuid
   placedAt                 DateTime?     @db.Timestamptz
+  prepStartedAt            DateTime?     @db.Timestamptz
+  /// Max estimated ready time across active items (for board / worker).
+  estimatedReadyAt         DateTime?     @db.Timestamptz
+  /// Set when READY is reached (auto or manual) to prevent duplicate notifications.
+  readyNotifiedAt          DateTime?     @db.Timestamptz
   completedAt              DateTime?     @db.Timestamptz
   cancelledAt              DateTime?     @db.Timestamptz
   createdAt                DateTime      @default(now()) @db.Timestamptz
@@ -587,6 +621,7 @@ model Order {
   @@index([tableSessionId, status])
   @@index([type, createdAt])
   @@index([createdById])
+  @@index([status, estimatedReadyAt])
   @@map("orders")
 }
 
@@ -604,6 +639,11 @@ model OrderItem {
   lineTotal            Decimal         @db.Decimal(12, 2)
   status               OrderItemStatus @default(PENDING)
   specialInstructions  String?
+  /// Snapshot of MenuItem.prepTimeMinutes at order time.
+  prepTimeMinutesSnapshot Int?
+  prepStartedAt        DateTime?       @db.Timestamptz
+  estimatedReadyAt     DateTime?       @db.Timestamptz
+  prepCompletedAt      DateTime?       @db.Timestamptz
   createdAt            DateTime        @default(now()) @db.Timestamptz
   updatedAt            DateTime        @updatedAt @db.Timestamptz
 
@@ -615,6 +655,7 @@ model OrderItem {
 
   @@index([orderId])
   @@index([status])
+  @@index([estimatedReadyAt])
   @@map("order_items")
 }
 
@@ -672,6 +713,14 @@ model OrderSequence {
 
   @@unique([dateKey, orderType])
   @@map("order_sequences")
+}
+
+/// Single-row global counter for sequential order numbers (1, 2, 3, …).
+model OrderGlobalSequence {
+  id        String @id @default("global")
+  lastValue Int    @default(0)
+
+  @@map("order_global_sequences")
 }
 
 // ─── Kitchen ─────────────────────────────────────────────────────────────────
@@ -737,8 +786,9 @@ model PaymentMethod {
   createdAt DateTime  @default(now()) @db.Timestamptz
   updatedAt DateTime  @updatedAt @db.Timestamptz
 
-  payments Payment[]
-  expenses Expense[]
+  payments          Payment[]
+  expenses          Expense[]
+  recurringExpenses RecurringExpense[]
 
   @@map("payment_methods")
 }
@@ -840,10 +890,14 @@ model PrintJob {
 // ─── Inventory ───────────────────────────────────────────────────────────────
 
 model Unit {
-  id        String   @id @default(uuid()) @db.Uuid
-  code      String   @unique
-  name      String
-  createdAt DateTime @default(now()) @db.Timestamptz
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique
+  name        String
+  /// MASS | VOLUME | COUNT — incompatible dimensions cannot convert.
+  dimension   String   @default("COUNT")
+  /// Multiply quantity in this unit by toBaseFactor to get base units (g, ml, or piece).
+  toBaseFactor Decimal @default(1) @db.Decimal(14, 6)
+  createdAt   DateTime @default(now()) @db.Timestamptz
 
   ingredients Ingredient[]
 
@@ -870,6 +924,7 @@ model Ingredient {
   id            String    @id @default(uuid()) @db.Uuid
   name          String
   sku           String    @unique
+  description   String?
   categoryId    String    @db.Uuid
   unitId        String    @db.Uuid
   supplierId    String?   @db.Uuid
@@ -877,6 +932,8 @@ model Ingredient {
   reservedStock Decimal   @default(0) @db.Decimal(14, 4)
   minStock      Decimal   @default(0) @db.Decimal(14, 4)
   avgCost       Decimal   @default(0) @db.Decimal(12, 4)
+  /// Set when low-stock socket was emitted; cleared when stock rises above minStock.
+  lowStockNotifiedAt DateTime? @db.Timestamptz
   isActive      Boolean   @default(true)
   deletedAt     DateTime? @db.Timestamptz
   createdAt     DateTime  @default(now()) @db.Timestamptz
@@ -970,10 +1027,12 @@ model InventoryTransaction {
 
 /// Ensures recipe stock is consumed at most once per order (first successful payment).
 model OrderInventoryDeduction {
-  id         String   @id @default(uuid()) @db.Uuid
-  orderId    String   @unique @db.Uuid
-  deductedAt DateTime @default(now()) @db.Timestamptz
-  notes      String?
+  id           String    @id @default(uuid()) @db.Uuid
+  orderId      String    @unique @db.Uuid
+  deductedAt   DateTime  @default(now()) @db.Timestamptz
+  notes        String?
+  /// Set when cancel-after-prep recorded wastage (idempotent).
+  wastageAt    DateTime? @db.Timestamptz
 
   order Order @relation(fields: [orderId], references: [id])
 
@@ -1060,30 +1119,72 @@ model ExpenseCategory {
   deletedAt DateTime? @db.Timestamptz
   createdAt DateTime  @default(now()) @db.Timestamptz
 
-  expenses Expense[]
+  expenses          Expense[]
+  recurringExpenses RecurringExpense[]
 
   @@map("expense_categories")
 }
 
+model RecurringExpense {
+  id           String                     @id @default(uuid()) @db.Uuid
+  title        String
+  description  String?
+  categoryId   String                     @db.Uuid
+  methodId     String?                    @db.Uuid
+  amount       Decimal                    @db.Decimal(12, 2)
+  frequency    RecurringExpenseFrequency
+  status       RecurringExpenseStatus     @default(ACTIVE)
+  startDate    DateTime                   @db.Date
+  /// Original day-of-month (1–31) used when clamping shorter months
+  anchorDay    Int
+  nextDueDate  DateTime                   @db.Date
+  endDate      DateTime?                  @db.Date
+  createdById  String                     @db.Uuid
+  updatedById  String?                    @db.Uuid
+  createdAt    DateTime                   @default(now()) @db.Timestamptz
+  updatedAt    DateTime                   @updatedAt @db.Timestamptz
+
+  category  ExpenseCategory @relation(fields: [categoryId], references: [id])
+  method    PaymentMethod?  @relation(fields: [methodId], references: [id])
+  createdBy User            @relation("RecurringExpenseCreatedBy", fields: [createdById], references: [id])
+  updatedBy User?           @relation("RecurringExpenseUpdatedBy", fields: [updatedById], references: [id])
+  expenses  Expense[]
+
+  @@index([status, nextDueDate])
+  @@index([categoryId])
+  @@map("recurring_expenses")
+}
+
 model Expense {
-  id          String   @id @default(uuid()) @db.Uuid
-  categoryId  String   @db.Uuid
-  methodId    String?  @db.Uuid
-  shiftId     String?  @db.Uuid
-  recordedById String  @db.Uuid
-  description String
-  amount      Decimal  @db.Decimal(12, 2)
-  expenseDate DateTime @db.Date
-  createdAt   DateTime @default(now()) @db.Timestamptz
-  updatedAt   DateTime @updatedAt @db.Timestamptz
+  id                 String               @id @default(uuid()) @db.Uuid
+  categoryId         String               @db.Uuid
+  methodId           String?              @db.Uuid
+  shiftId            String?              @db.Uuid
+  recordedById       String               @db.Uuid
+  updatedById        String?              @db.Uuid
+  recurringExpenseId String?              @db.Uuid
+  /// Canonical due date key for the schedule occurrence (YYYY-MM-DD); unique with schedule
+  billingPeriod      String?
+  paymentStatus      ExpensePaymentStatus @default(UNPAID)
+  title              String
+  description        String?
+  amount             Decimal              @db.Decimal(12, 2)
+  expenseDate        DateTime             @db.Date
+  createdAt          DateTime             @default(now()) @db.Timestamptz
+  updatedAt          DateTime             @updatedAt @db.Timestamptz
 
-  category   ExpenseCategory @relation(fields: [categoryId], references: [id])
-  method     PaymentMethod?  @relation(fields: [methodId], references: [id])
-  shift      EmployeeShift?  @relation(fields: [shiftId], references: [id])
-  recordedBy User            @relation(fields: [recordedById], references: [id])
+  category         ExpenseCategory   @relation(fields: [categoryId], references: [id])
+  method           PaymentMethod?    @relation(fields: [methodId], references: [id])
+  shift            EmployeeShift?    @relation(fields: [shiftId], references: [id])
+  recordedBy       User              @relation("ExpenseRecordedBy", fields: [recordedById], references: [id])
+  updatedBy        User?             @relation("ExpenseUpdatedBy", fields: [updatedById], references: [id])
+  recurringExpense RecurringExpense? @relation(fields: [recurringExpenseId], references: [id], onDelete: SetNull)
 
+  @@unique([recurringExpenseId, billingPeriod])
   @@index([expenseDate])
   @@index([categoryId])
+  @@index([paymentStatus])
+  @@index([recurringExpenseId])
   @@map("expenses")
 }
 

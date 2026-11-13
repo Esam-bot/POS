@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { billingApi } from '../../services/billingService';
 import { ordersApi } from '../../services/posService';
 import { money } from '../../utils/formatMoney';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../components/ui/Toast';
+import { useSocket } from '../../hooks/useSocket';
 import Button from '../../components/ui/Button';
 import Badge from '../../components/ui/Badge';
 import { Field, TextInput, Select, TextArea } from '../../components/ui/Input';
@@ -16,6 +17,16 @@ function emptyPortion(methodId, amount = '') {
     amountTendered: '',
     reference: '',
   };
+}
+
+function errMessage(err, fallback) {
+  const msg = err?.response?.data?.message;
+  if (typeof msg === 'string' && msg.trim()) return msg;
+  if (Array.isArray(err?.response?.data?.errors) && err.response.data.errors[0]?.message) {
+    return err.response.data.errors[0].message;
+  }
+  if (typeof err?.message === 'string' && err.message.trim()) return err.message;
+  return fallback;
 }
 
 export default function PaymentPage() {
@@ -37,42 +48,85 @@ export default function PaymentPage() {
   const [settleReason, setSettleReason] = useState('');
   const [allowNegativeStock, setAllowNegativeStock] = useState(false);
   const [stockError, setStockError] = useState('');
+  const [loadError, setLoadError] = useState('');
+  const portionsRef = useRef(portions);
+  portionsRef.current = portions;
 
-  const loadOrder = useCallback(async () => {
-    try {
-      const [o, q] = await Promise.all([ordersApi.get(id), billingApi.quote(id)]);
-      setOrder(o);
-      setQuote(q);
-      setPortions([]);
-      setMixed(false);
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to load payment data');
-    }
-  }, [id, toast]);
-
-  useEffect(() => {
-    loadOrder();
-  }, [loadOrder]);
-
-  const outstanding = Number(quote?.outstandingPreTax || 0);
-  const methods = quote?.paymentMethods || [];
-
-  const activePortions = useMemo(
-    () =>
-      portions.filter((p) => p.methodId && Number(p.preTaxAmount) > 0).map((p) => ({
+  const buildActivePortions = useCallback((list) => {
+    return (list || [])
+      .filter((p) => p.methodId && Number(p.preTaxAmount) > 0)
+      .map((p) => ({
         methodId: p.methodId,
         preTaxAmount: Number(p.preTaxAmount),
-        amountTendered: p.amountTendered !== '' ? Number(p.amountTendered) : null,
-        reference: p.reference || null,
-      })),
-    [portions]
+        // Omit null tender/reference so Zod coerce doesn't turn null → 0 unnecessarily
+        ...(p.amountTendered !== '' && p.amountTendered != null
+          ? { amountTendered: Number(p.amountTendered) }
+          : {}),
+        ...(p.reference ? { reference: p.reference } : {}),
+      }));
+  }, []);
+
+  const loadOrder = useCallback(async ({ resetForm = true } = {}) => {
+    try {
+      setLoadError('');
+      const active = resetForm ? [] : buildActivePortions(portionsRef.current);
+      const [o, q] = await Promise.all([
+        ordersApi.get(id),
+        billingApi.quote(id, active.length ? active : undefined),
+      ]);
+      setOrder(o);
+      setQuote(q);
+      if (resetForm) {
+        setPortions([]);
+        setMixed(false);
+      }
+    } catch (err) {
+      const message = errMessage(err, 'Failed to load payment data');
+      setLoadError(message);
+      toast.error(message);
+    }
+  }, [id, toast, buildActivePortions]);
+
+  useEffect(() => {
+    loadOrder({ resetForm: true });
+  }, [loadOrder]);
+
+  useSocket(
+    'pos',
+    ['order.status.updated', 'order.ready', 'order.updated', 'payment.created', '__connected'],
+    (event, payload) => {
+      if (event === '__connected') {
+        loadOrder({ resetForm: false });
+        return;
+      }
+      const orderId = payload?.id || payload?.orderId;
+      if (!orderId || orderId === id) {
+        // Keep in-progress tender entry; only refresh order/quote snapshot.
+        loadOrder({ resetForm: event === 'payment.created' });
+      }
+    },
+    true
+  );
+
+  const outstanding = Number(quote?.outstandingPreTax || 0);
+  const methods = Array.isArray(quote?.paymentMethods) ? quote.paymentMethods : [];
+
+  const activePortions = useMemo(
+    () => buildActivePortions(portions),
+    [portions, buildActivePortions]
+  );
+  const activePortionsKey = useMemo(
+    () => JSON.stringify(activePortions),
+    [activePortions]
   );
 
   // Always refresh tax/total from backend quote — never compute tax in JS for display.
   useEffect(() => {
     if (!id || !quote) return undefined;
     if (!activePortions.length) {
-      setQuote((prev) => (prev ? { ...prev, portionPreview: null } : prev));
+      setQuote((prev) =>
+        prev?.portionPreview ? { ...prev, portionPreview: null } : prev
+      );
       return undefined;
     }
 
@@ -84,7 +138,7 @@ export default function PaymentPage() {
         if (!cancelled) setQuote(q);
       } catch (err) {
         if (!cancelled) {
-          toast.error(err.response?.data?.message || 'Could not refresh tax quote');
+          toast.error(errMessage(err, 'Could not refresh tax quote'));
         }
       } finally {
         if (!cancelled) setQuoting(false);
@@ -95,9 +149,12 @@ export default function PaymentPage() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [id, activePortions, toast]);
+    // activePortionsKey keeps the effect stable across referential churn
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, activePortionsKey, toast]);
 
-  const preview = quote?.portionPreview || null;
+  // Guard: never call .reduce on a non-array (would white-screen React).
+  const preview = Array.isArray(quote?.portionPreview) ? quote.portionPreview : null;
   const previewTax = preview
     ? preview.reduce((sum, p) => sum + Number(p.taxAmount || 0), 0)
     : null;
@@ -114,6 +171,9 @@ export default function PaymentPage() {
     setPortions([
       emptyPortion(methodId, String(outstanding || '')),
     ]);
+    // Drop stale preview immediately so cash/non-cash UI cannot mix across methods
+    // while the debounced tax quote is in flight.
+    setQuote((prev) => (prev ? { ...prev, portionPreview: null } : prev));
   }
 
   function enableMixed() {
@@ -158,7 +218,7 @@ export default function PaymentPage() {
         navigate(`/pos/orders/${id}/receipt`);
       }
     } catch (err) {
-      const message = err.response?.data?.message || 'Payment failed';
+      const message = errMessage(err, 'Payment failed');
       const isStock = /not enough stock/i.test(message);
       setStockError(isStock ? message : '');
       toast.error(message);
@@ -168,30 +228,50 @@ export default function PaymentPage() {
   }
 
   if (!order || !quote) {
-    return <p className="p-4 text-white/70">Loading checkout…</p>;
+    return (
+      <div className="space-y-3 p-4 text-[var(--color-ink-muted)]">
+        <p>{loadError ? 'Could not load checkout.' : 'Loading checkout…'}</p>
+        {loadError ? (
+          <>
+            <p className="text-sm text-[var(--color-danger)]">{loadError}</p>
+            <Button variant="secondary" onClick={() => loadOrder({ resetForm: true })}>
+              Retry
+            </Button>
+          </>
+        ) : null}
+      </div>
+    );
   }
 
-  const selectedSingle = !mixed && portions[0] ? methods.find((m) => m.id === portions[0].methodId) : null;
+  const selectedSingle =
+    !mixed && portions[0]?.methodId
+      ? methods.find((m) => m.id === portions[0].methodId) || null
+      : null;
   const cashLine = preview?.find((p) => {
     const m = methods.find((x) => x.id === p.methodId);
     return m?.isCash;
   });
   const cashPortion = portions.find((p) => methods.find((m) => m.id === p.methodId)?.isCash);
+  // Important: `cashPortion?.amountTendered !== ''` is TRUE when cashPortion is
+  // undefined (undefined !== ''), which crashed when switching Cash → Card while
+  // the previous cash quote preview was still on screen.
   const changeDue =
-    cashLine && cashPortion?.amountTendered !== ''
-      ? Math.max(0, Number(cashPortion.amountTendered) - Number(cashLine.grossAmount))
+    cashLine && cashPortion && cashPortion.amountTendered !== ''
+      ? Math.max(
+          0,
+          Number(cashPortion.amountTendered) - Number(cashLine.grossAmount || 0)
+        )
       : null;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-4 text-white">
+    <div className="mx-auto max-w-5xl space-y-4 p-4 text-[var(--color-ink)]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-[family-name:var(--font-display)] text-2xl font-semibold tracking-tight">
             Checkout · {order.orderNumber}
           </h1>
-          <p className="mt-1 text-sm text-white/60">
-            {order.type.replaceAll('_', ' ')}
-            {order.diningTable ? ` · Table ${order.diningTable.number}` : ''}
+          <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
+            {String(order.type || '').replaceAll('_', ' ') || 'Order'}
             {' · '}
             <Badge tone="warning">{String(order.paymentStatus || '').replaceAll('_', ' ')}</Badge>
           </p>
@@ -207,7 +287,7 @@ export default function PaymentPage() {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1.1fr_1fr]">
-        <section className="theme-light space-y-4 rounded-xl border border-[var(--color-line)] bg-white p-5 text-[var(--color-ink)]">
+        <section className="space-y-4 rounded-xl border border-[var(--color-line)] bg-[var(--color-section)] p-5 text-[var(--color-ink)]">
           <h2 className="app-section-title">Order summary</h2>
           <dl className="space-y-2 text-sm">
             {(order.customerName || order.customerPhone) && (
@@ -226,11 +306,23 @@ export default function PaymentPage() {
               <dt className="text-[var(--color-ink-muted)]">Order type</dt>
               <dd className="font-medium">{String(order.type || '').replaceAll('_', ' ')}</dd>
             </div>
-            {order.diningTable?.number && (
-              <div className="flex justify-between gap-3">
-                <dt className="text-[var(--color-ink-muted)]">Table</dt>
-                <dd className="font-medium">{order.diningTable.number}</dd>
-              </div>
+            {order.type === 'DELIVERY' && order.deliveryAddressSnapshot && (
+              <>
+                <div className="flex justify-between gap-3 border-t border-[var(--color-line)] pt-2">
+                  <dt className="text-[var(--color-ink-muted)]">Delivery address</dt>
+                  <dd className="max-w-[60%] text-right font-medium">
+                    {order.deliveryAddressSnapshot.line1 || '—'}
+                  </dd>
+                </div>
+                {order.deliveryAddressSnapshot.city ? (
+                  <div className="flex justify-between gap-3">
+                    <dt className="text-[var(--color-ink-muted)]">Nearby / area</dt>
+                    <dd className="max-w-[60%] text-right font-medium">
+                      {order.deliveryAddressSnapshot.city}
+                    </dd>
+                  </div>
+                ) : null}
+              </>
             )}
             {(order.items || []).slice(0, 8).map((item) => (
               <div key={item.id} className="flex justify-between gap-3 border-t border-[var(--color-line)] pt-2">
@@ -276,7 +368,7 @@ export default function PaymentPage() {
             </div>
             <div className="flex justify-between gap-3 text-lg font-bold">
               <dt>Total due now</dt>
-              <dd className="text-[var(--color-brand-dark)]">
+              <dd className="text-[var(--color-brand)]">
                 {previewGross == null ? '—' : money(previewGross)}
               </dd>
             </div>
@@ -312,7 +404,7 @@ export default function PaymentPage() {
             </div>
           )}
 
-          {selectedSingle?.isCash && previewGross != null && (
+          {Boolean(selectedSingle?.isCash) && previewGross != null && (
             <div className="space-y-2 rounded-lg border border-[var(--color-line)] p-3">
               <Field label="Amount received">
                 <TextInput
@@ -334,7 +426,7 @@ export default function PaymentPage() {
           )}
         </section>
 
-        <section className="theme-light space-y-4 rounded-xl border border-[var(--color-line)] bg-white p-5 text-[var(--color-ink)]">
+        <section className="space-y-4 rounded-xl border border-[var(--color-line)] bg-[var(--color-section)] p-5 text-[var(--color-ink)]">
           <div className="flex items-center justify-between gap-2">
             <h2 className="app-section-title">Payment method</h2>
             {outstanding > 0 && (
@@ -359,6 +451,7 @@ export default function PaymentPage() {
             <div className="grid gap-2 sm:grid-cols-2">
               {methods.map((m) => {
                 const active = portions[0]?.methodId === m.id;
+                const isCash = Boolean(m.isCash);
                 return (
                   <button
                     key={m.id}
@@ -372,11 +465,17 @@ export default function PaymentPage() {
                   >
                     <p className="font-semibold">{m.name}</p>
                     <p className="text-xs text-[var(--color-ink-muted)]">
-                      Tax {Number(m.taxRate)}%
+                      Tax {Number(m.taxRate) || 0}%
+                      {isCash ? ' · Cash' : ''}
                     </p>
                   </button>
                 );
               })}
+              {!methods.length && (
+                <p className="col-span-full text-sm text-[var(--color-danger)]">
+                  No active payment methods. Add them under Settings.
+                </p>
+              )}
             </div>
           )}
 
@@ -466,11 +565,13 @@ export default function PaymentPage() {
             </Field>
           )}
 
-          {!mixed && selectedSingle && !selectedSingle.isCash && (
+          {!mixed && selectedSingle && !Boolean(selectedSingle.isCash) && (
             <Field label="Reference (optional)">
               <TextInput
                 value={portions[0]?.reference || ''}
                 onChange={(e) => updatePortion(0, { reference: e.target.value })}
+                placeholder="Txn ID / last 4 digits"
+                autoComplete="off"
               />
             </Field>
           )}
@@ -546,9 +647,9 @@ export default function PaymentPage() {
                             value: Number(discountValue),
                           });
                           toast.success('Discount applied');
-                          loadOrder();
+                          loadOrder({ resetForm: false });
                         } catch (err) {
-                          toast.error(err.response?.data?.message || 'Discount failed');
+                          toast.error(errMessage(err, 'Discount failed'));
                         }
                       }}
                     >
@@ -588,7 +689,7 @@ export default function PaymentPage() {
                           toast.success(`Marked ${settleStatus}`);
                           navigate(`/pos/orders/${id}`);
                         } catch (err) {
-                          toast.error(err.response?.data?.message || 'Settlement failed');
+                          toast.error(errMessage(err, 'Settlement failed'));
                         }
                       }}
                     >

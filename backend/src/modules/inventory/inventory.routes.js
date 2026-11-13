@@ -1,7 +1,7 @@
 const express = require('express');
 const controller = require('./inventory.controller');
 const validate = require('../../middleware/validate');
-const { authenticate, authorize } = require('../../middleware/auth');
+const { authenticate, authorize, authorizeAny } = require('../../middleware/auth');
 const schemas = require('./inventory.schemas');
 
 const router = express.Router();
@@ -10,8 +10,61 @@ router.use(authenticate);
 
 router.get('/dashboard', authorize('inventory.view'), controller.getDashboard);
 router.get('/units', authorize('inventory.view'), controller.listUnits);
-router.get('/suppliers', authorize('inventory.view'), controller.listSuppliers);
 router.get('/menu-products', authorize('inventory.view'), controller.listMenuProducts);
+
+router.get(
+  '/suppliers',
+  authorizeAny('inventory.view', 'suppliers.manage'),
+  validate(schemas.paginationQuery, 'query'),
+  controller.listSuppliers
+);
+router.get('/suppliers/:id', authorizeAny('inventory.view', 'suppliers.manage'), controller.getSupplier);
+router.post(
+  '/suppliers',
+  authorize('suppliers.manage'),
+  validate(schemas.supplierCreate),
+  controller.createSupplier
+);
+router.patch(
+  '/suppliers/:id',
+  authorize('suppliers.manage'),
+  validate(schemas.supplierUpdate),
+  controller.updateSupplier
+);
+router.post('/suppliers/:id/archive', authorize('suppliers.manage'), controller.archiveSupplier);
+
+router.get(
+  '/purchases',
+  authorizeAny('inventory.view', 'purchases.manage'),
+  validate(schemas.paginationQuery, 'query'),
+  controller.listPurchases
+);
+router.get('/purchases/:id', authorizeAny('inventory.view', 'purchases.manage'), controller.getPurchase);
+router.post(
+  '/purchases',
+  authorize('purchases.manage'),
+  validate(schemas.purchaseCreate),
+  controller.createPurchase
+);
+router.patch(
+  '/purchases/:id',
+  authorize('purchases.manage'),
+  validate(schemas.purchaseUpdate),
+  controller.updatePurchase
+);
+router.post(
+  '/purchases/:id/receive',
+  authorize('purchases.manage'),
+  validate(schemas.purchaseReceive),
+  controller.receivePurchase
+);
+
+router.get('/reports/stock', authorize('inventory.view'), controller.reportCurrentStock);
+router.get('/reports/low-stock', authorize('inventory.view'), controller.reportLowStock);
+router.get('/reports/consumption', authorize('inventory.view'), controller.reportConsumption);
+router.get('/reports/purchases', authorize('inventory.view'), controller.reportPurchases);
+router.get('/reports/wastage', authorize('inventory.view'), controller.reportWastage);
+router.get('/reports/valuation', authorize('inventory.view'), controller.reportValuation);
 
 router.get(
   '/categories',
@@ -38,6 +91,7 @@ router.patch(
   validate(schemas.statusBody),
   controller.setCategoryStatus
 );
+router.delete('/categories/:id', authorize('inventory.update'), controller.deleteCategory);
 
 router.get(
   '/items',

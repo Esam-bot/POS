@@ -1,80 +1,52 @@
 const prisma = require('../../config/db');
 const AppError = require('../../utils/AppError');
-const { parsePagination, paginatedResult } = require('../../utils/pagination');
 const { serializeDecimals } = require('../../utils/decimal');
+const { parsePagination, paginatedResult } = require('../../utils/pagination');
 
 async function getDefaultRestaurantId() {
   const restaurant = await prisma.restaurant.findFirst({
     where: { isActive: true, deletedAt: null },
-    orderBy: { createdAt: 'asc' },
   });
-  if (!restaurant) throw new AppError('No restaurant configured', 500);
+  if (!restaurant) throw new AppError('Restaurant not found', 404);
   return restaurant.id;
-}
-
-async function assertUniqueNumber(restaurantId, number, excludeId) {
-  const existing = await prisma.diningTable.findFirst({
-    where: {
-      restaurantId,
-      number: { equals: number, mode: 'insensitive' },
-      deletedAt: null,
-      ...(excludeId ? { NOT: { id: excludeId } } : {}),
-    },
-  });
-  if (existing) throw new AppError('Table number already exists', 409);
 }
 
 function mapTable(table) {
   if (!table) return table;
-  const activeSessionLink = (table.sessionTables || []).find((s) => s.isActive);
+  const activeSessionLink = (table.sessionTables || []).find((st) => st.isActive);
   return serializeDecimals({
     ...table,
+    sessionTables: undefined,
     activeSession: activeSessionLink
       ? {
           id: activeSessionLink.session.id,
           status: activeSessionLink.session.status,
           openedAt: activeSessionLink.session.openedAt,
-          guestCount: activeSessionLink.session.guestCount,
-          tableCount: activeSessionLink.session._count?.tables,
-          orderCount: activeSessionLink.session._count?.orders,
         }
       : null,
-    sessionTables: undefined,
   });
 }
+
+const tableInclude = {
+  sessionTables: {
+    where: { isActive: true },
+    include: {
+      session: { select: { id: true, status: true, openedAt: true } },
+    },
+    take: 1,
+  },
+};
 
 async function listTables(query = {}) {
   const { page, limit, skip } = parsePagination(query);
   const where = { deletedAt: null };
-  if (query.search) {
-    where.OR = [
-      { number: { contains: query.search, mode: 'insensitive' } },
-      { section: { contains: query.search, mode: 'insensitive' } },
-      { notes: { contains: query.search, mode: 'insensitive' } },
-    ];
-  }
   if (query.status) where.status = query.status;
-  if (query.isActive !== undefined) {
-    where.isActive = query.isActive === true || query.isActive === 'true';
+  if (query.section) where.section = query.section;
+  if (query.isActive === 'true') where.isActive = true;
+  if (query.isActive === 'false') where.isActive = false;
+  if (query.search) {
+    where.number = { contains: query.search, mode: 'insensitive' };
   }
-
-  const include = {
-    sessionTables: {
-      where: { isActive: true },
-      include: {
-        session: {
-          include: {
-            _count: {
-              select: {
-                tables: { where: { isActive: true } },
-                orders: true,
-              },
-            },
-          },
-        },
-      },
-    },
-  };
 
   const [total, rows] = await Promise.all([
     prisma.diningTable.count({ where }),
@@ -83,7 +55,7 @@ async function listTables(query = {}) {
       skip,
       take: limit,
       orderBy: [{ section: 'asc' }, { number: 'asc' }],
-      include,
+      include: tableInclude,
     }),
   ]);
 
@@ -93,23 +65,7 @@ async function listTables(query = {}) {
 async function getTable(id) {
   const table = await prisma.diningTable.findFirst({
     where: { id, deletedAt: null },
-    include: {
-      sessionTables: {
-        where: { isActive: true },
-        include: {
-          session: {
-            include: {
-              _count: {
-                select: {
-                  tables: { where: { isActive: true } },
-                  orders: true,
-                },
-              },
-            },
-          },
-        },
-      },
-    },
+    include: tableInclude,
   });
   if (!table) throw new AppError('Table not found', 404);
   return mapTable(table);
@@ -117,61 +73,69 @@ async function getTable(id) {
 
 async function createTable(data) {
   const restaurantId = await getDefaultRestaurantId();
-  if (!data.capacity || data.capacity < 1) {
-    throw new AppError('Capacity must be a positive integer', 400);
-  }
-  await assertUniqueNumber(restaurantId, data.number);
+  const number = String(data.number).trim();
+  const existing = await prisma.diningTable.findFirst({
+    where: { restaurantId, number: { equals: number, mode: 'insensitive' }, deletedAt: null },
+  });
+  if (existing) throw new AppError('Table number already exists', 409);
 
   const table = await prisma.diningTable.create({
     data: {
       restaurantId,
-      number: data.number,
-      capacity: data.capacity,
+      number,
+      capacity: data.capacity || 4,
       section: data.section || null,
       notes: data.notes || null,
-      isActive: data.isActive ?? true,
-      status: data.isActive === false ? 'INACTIVE' : 'AVAILABLE',
+      isActive: data.isActive !== false,
+      status: 'AVAILABLE',
     },
+    include: tableInclude,
   });
-  return serializeDecimals(table);
+  return mapTable(table);
 }
 
 async function updateTable(id, data) {
   const existing = await prisma.diningTable.findFirst({ where: { id, deletedAt: null } });
   if (!existing) throw new AppError('Table not found', 404);
 
-  if (data.number && data.number.toLowerCase() !== existing.number.toLowerCase()) {
-    await assertUniqueNumber(existing.restaurantId, data.number, id);
+  if (data.number && data.number.trim().toLowerCase() !== existing.number.toLowerCase()) {
+    const dup = await prisma.diningTable.findFirst({
+      where: {
+        restaurantId: existing.restaurantId,
+        number: { equals: data.number.trim(), mode: 'insensitive' },
+        deletedAt: null,
+        NOT: { id },
+      },
+    });
+    if (dup) throw new AppError('Table number already exists', 409);
   }
 
   if (data.isActive === false) {
     const active = await prisma.sessionTable.findFirst({
       where: { tableId: id, isActive: true },
     });
-    if (active) {
-      throw new AppError('Cannot deactivate a table with an active session', 409);
-    }
+    if (active) throw new AppError('Cannot deactivate a table with an active session', 409);
   }
 
   const table = await prisma.diningTable.update({
     where: { id },
     data: {
-      ...(data.number !== undefined ? { number: data.number } : {}),
+      ...(data.number !== undefined ? { number: data.number.trim() } : {}),
       ...(data.capacity !== undefined ? { capacity: data.capacity } : {}),
       ...(data.section !== undefined ? { section: data.section } : {}),
       ...(data.notes !== undefined ? { notes: data.notes } : {}),
-      ...(data.isActive !== undefined
-        ? {
-            isActive: data.isActive,
-            status: data.isActive ? existing.status === 'INACTIVE' ? 'AVAILABLE' : existing.status : 'INACTIVE',
-          }
-        : {}),
+      ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
     },
+    include: tableInclude,
   });
-  return serializeDecimals(table);
+  return mapTable(table);
 }
 
-async function setTableStatus(id, status, { force = false, userId = null } = {}) {
+/**
+ * Manual status changes. OCCUPIED is normally set by opening a session.
+ * CLEANING → AVAILABLE can be manual (clears timer) or via worker.
+ */
+async function setTableStatus(id, status, { userId = null } = {}) {
   const existing = await prisma.diningTable.findFirst({ where: { id, deletedAt: null } });
   if (!existing) throw new AppError('Table not found', 404);
 
@@ -179,40 +143,42 @@ async function setTableStatus(id, status, { force = false, userId = null } = {})
     throw new AppError('Cannot change status of an inactive table', 409);
   }
 
-  if (existing.status === 'OCCUPIED' && status === 'AVAILABLE' && !force) {
+  if (existing.status === 'OCCUPIED' && status === 'AVAILABLE') {
     throw new AppError(
-      'Cannot mark an occupied table as AVAILABLE. Close the session or mark CLEANING first.',
+      'Cannot mark an occupied table as AVAILABLE. Mark guests left (CLEANING) first.',
       409
     );
   }
 
-  if (status === 'AVAILABLE' && existing.status === 'OCCUPIED') {
-    throw new AppError('Occupied tables cannot be set AVAILABLE directly', 409);
+  if (status === 'OCCUPIED') {
+    throw new AppError('Seat guests by opening a table session instead', 400);
   }
 
   if (status === 'INACTIVE' || status === 'DISABLED') {
     const active = await prisma.sessionTable.findFirst({
       where: { tableId: id, isActive: true },
     });
-    if (active) {
-      throw new AppError('Cannot deactivate a table with an active session', 409);
-    }
+    if (active) throw new AppError('Cannot deactivate a table with an active session', 409);
   }
+
+  const data = {
+    status,
+    ...(status === 'CLEANING' ? { cleaningStartedAt: new Date() } : {}),
+    ...(status === 'AVAILABLE' ? { cleaningStartedAt: null, isActive: true } : {}),
+    ...(status === 'INACTIVE' || status === 'DISABLED' ? { isActive: false, cleaningStartedAt: null } : {}),
+  };
 
   const table = await prisma.diningTable.update({
     where: { id },
-    data: {
-      status,
-      ...(status === 'INACTIVE' || status === 'DISABLED' ? { isActive: false } : {}),
-      ...(status === 'AVAILABLE' ? { isActive: true } : {}),
-    },
+    data,
+    include: tableInclude,
   });
 
-  if (existing.status === 'CLEANING' && status === 'AVAILABLE') {
+  if (existing.status !== status) {
     await prisma.auditLog.create({
       data: {
         actorId: userId || null,
-        action: 'TABLE_MARK_AVAILABLE',
+        action: 'TABLE_STATUS',
         entityType: 'DiningTable',
         entityId: id,
         before: { status: existing.status },
@@ -221,7 +187,36 @@ async function setTableStatus(id, status, { force = false, userId = null } = {})
     });
   }
 
-  return serializeDecimals(table);
+  return mapTable(table);
+}
+
+async function softDeleteTable(id) {
+  const existing = await prisma.diningTable.findFirst({ where: { id, deletedAt: null } });
+  if (!existing) throw new AppError('Table not found', 404);
+
+  const active = await prisma.sessionTable.findFirst({
+    where: { tableId: id, isActive: true },
+  });
+  if (active) {
+    throw new AppError('Cannot delete a table with an active session. Close the session first.', 409);
+  }
+
+  if (existing.status === 'OCCUPIED' || existing.status === 'CLEANING') {
+    throw new AppError('Cannot delete a table that is occupied or cleaning. Mark it available first.', 409);
+  }
+
+  await prisma.diningTable.update({
+    where: { id },
+    data: {
+      deletedAt: new Date(),
+      isActive: false,
+      status: 'INACTIVE',
+      cleaningStartedAt: null,
+      // Free unique (restaurantId, number) for reuse
+      number: `${existing.number}__deleted_${Date.now()}`,
+    },
+  });
+  return { deleted: true, id, number: existing.number };
 }
 
 module.exports = {
@@ -230,5 +225,7 @@ module.exports = {
   createTable,
   updateTable,
   setTableStatus,
+  softDeleteTable,
   getDefaultRestaurantId,
+  mapTable,
 };

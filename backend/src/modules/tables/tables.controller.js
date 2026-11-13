@@ -24,7 +24,7 @@ async function create(req, res, next) {
   try {
     const data = await tablesService.createTable(req.body);
     emitEvent(req, 'table.status.updated', data);
-    return success(res, 'Table created successfully', data, 201);
+    return success(res, 'Table created', data, 201);
   } catch (err) {
     next(err);
   }
@@ -34,7 +34,7 @@ async function update(req, res, next) {
   try {
     const data = await tablesService.updateTable(req.params.id, req.body);
     emitEvent(req, 'table.status.updated', data);
-    return success(res, 'Table updated successfully', data);
+    return success(res, 'Table updated', data);
   } catch (err) {
     next(err);
   }
@@ -52,4 +52,14 @@ async function setStatus(req, res, next) {
   }
 }
 
-module.exports = { list, getOne, create, update, setStatus };
+async function remove(req, res, next) {
+  try {
+    const data = await tablesService.softDeleteTable(req.params.id);
+    emitEvent(req, 'table.status.updated', { id: req.params.id, deleted: true });
+    return success(res, 'Table deleted', data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { list, getOne, create, update, setStatus, remove };

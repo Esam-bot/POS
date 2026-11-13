@@ -86,6 +86,27 @@ describe('Phase 5 — dual print after successful payment', () => {
   });
 
   async function submitOrder(type = 'TAKEAWAY', extra = {}) {
+    let dineInExtra = {};
+    if (type === 'DINE_IN' && !extra.tableSessionId) {
+      const restaurant = await prisma.restaurant.findFirst({ where: { isActive: true } });
+      const table = await prisma.diningTable.create({
+        data: {
+          restaurantId: restaurant.id,
+          number: `PRT-T-${suffix}-${Date.now()}`,
+          capacity: 2,
+          section: 'Ground Floor',
+          status: 'AVAILABLE',
+          isActive: true,
+        },
+      });
+      const session = await request(app)
+        .post('/api/table-sessions')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ tableIds: [table.id] });
+      expect(session.status).toBe(201);
+      dineInExtra = { tableSessionId: session.body.data.id, diningTableId: table.id };
+    }
+
     const create = await request(app)
       .post('/api/orders')
       .set('Authorization', `Bearer ${adminToken}`)
@@ -93,6 +114,7 @@ describe('Phase 5 — dual print after successful payment', () => {
         type,
         customerName: 'Print Guest',
         customerPhone: '03001112233',
+        ...dineInExtra,
         ...extra,
         items: [
           {
@@ -317,20 +339,8 @@ describe('Phase 5 — dual print after successful payment', () => {
     expect(await prisma.printJob.count({ where: { orderId } })).toBe(3);
   });
 
-  it('dine-in payment slips include table; payment receipt still works', async () => {
-    const table = await prisma.diningTable.findFirst({
-      where: { isActive: true, status: 'AVAILABLE' },
-    });
-    const session = await request(app)
-      .post('/api/table-sessions')
-      .set('Authorization', `Bearer ${adminToken}`)
-      .send({ tableIds: [table.id] });
-    expect(session.status).toBe(201);
-
-    const orderId = await submitOrder('DINE_IN', {
-      tableSessionId: session.body.data.id,
-      diningTableId: table.id,
-    });
+  it('dine-in payment slips omit table; payment receipt still works', async () => {
+    const orderId = await submitOrder('DINE_IN');
 
     const quote = await request(app)
       .post(`/api/orders/${orderId}/payment-quote`)
@@ -347,12 +357,14 @@ describe('Phase 5 — dual print after successful payment', () => {
     const kitchen = await request(app)
       .get(`/api/orders/${orderId}/print/kitchen-ticket`)
       .set('Authorization', `Bearer ${adminToken}`);
-    expect(kitchen.body.data.snapshot.order.table).toBe(table.number);
+    expect(kitchen.body.data.snapshot.order.table).toBeUndefined();
+    expect(kitchen.body.data.snapshot.order.typeLabel).toBe('DINE IN');
 
     const receipt = await request(app)
       .post(`/api/orders/${orderId}/receipt`)
       .set('Authorization', `Bearer ${adminToken}`);
     expect(receipt.status).toBe(200);
     expect(receipt.body.data.receiptNumber).toBeTruthy();
+    expect(receipt.body.data.snapshot.order.table).toBeUndefined();
   });
 });

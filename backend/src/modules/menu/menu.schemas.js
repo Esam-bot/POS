@@ -58,6 +58,7 @@ const itemCreate = z.object({
   sku: z.string().trim().min(1).max(60),
   imageUrl: z.string().trim().optional().nullable(),
   basePrice: money,
+  prepTimeMinutes: z.coerce.number().int().min(0).max(240).optional().default(5),
   isAvailable: z.boolean().optional(),
   isActive: z.boolean().optional(),
   trackInventory: z.boolean().optional(),

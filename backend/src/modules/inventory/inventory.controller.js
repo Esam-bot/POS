@@ -4,6 +4,9 @@ const stock = require('./stock.service');
 const recipes = require('./recipes.service');
 const dashboard = require('./dashboard.service');
 const deduction = require('./deduction.service');
+const suppliers = require('./suppliers.service');
+const purchases = require('./purchases.service');
+const reports = require('./reports.service');
 const { success } = require('../../utils/apiResponse');
 
 async function getDashboard(req, res, next) {
@@ -53,6 +56,14 @@ async function setCategoryStatus(req, res, next) {
       'Category status updated',
       await categories.setCategoryStatus(req.params.id, req.body.isActive)
     );
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteCategory(req, res, next) {
+  try {
+    return success(res, 'Category deleted', await categories.softDeleteCategory(req.params.id));
   } catch (err) {
     next(err);
   }
@@ -118,7 +129,7 @@ async function listUnits(req, res, next) {
   }
 }
 
-async function listSuppliers(req, res, next) {
+async function listSuppliersLite(req, res, next) {
   try {
     return success(res, 'Suppliers retrieved', await items.listSuppliersLite());
   } catch (err) {
@@ -126,9 +137,138 @@ async function listSuppliers(req, res, next) {
   }
 }
 
+async function listSuppliers(req, res, next) {
+  try {
+    return success(res, 'Suppliers retrieved', await suppliers.listSuppliers(req.query));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getSupplier(req, res, next) {
+  try {
+    return success(res, 'Supplier retrieved', await suppliers.getSupplier(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function createSupplier(req, res, next) {
+  try {
+    return success(res, 'Supplier created', await suppliers.createSupplier(req.body), 201);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updateSupplier(req, res, next) {
+  try {
+    return success(res, 'Supplier updated', await suppliers.updateSupplier(req.params.id, req.body));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function archiveSupplier(req, res, next) {
+  try {
+    return success(res, 'Supplier archived', await suppliers.archiveSupplier(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listPurchases(req, res, next) {
+  try {
+    return success(res, 'Purchases retrieved', await purchases.listPurchases(req.query));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getPurchase(req, res, next) {
+  try {
+    return success(res, 'Purchase retrieved', await purchases.getPurchase(req.params.id));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function createPurchase(req, res, next) {
+  try {
+    return success(res, 'Purchase created', await purchases.createPurchase(req.body, req.user.id), 201);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updatePurchase(req, res, next) {
+  try {
+    return success(res, 'Purchase updated', await purchases.updatePurchase(req.params.id, req.body));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function receivePurchase(req, res, next) {
+  try {
+    const data = await purchases.receivePurchase(req.params.id, req.body, req.user.id, req);
+    return success(res, data.replayed ? 'Receive already recorded' : 'Stock received', data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function reportCurrentStock(req, res, next) {
+  try {
+    return success(res, 'Current stock report', await reports.currentStock());
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function reportLowStock(req, res, next) {
+  try {
+    return success(res, 'Low stock report', await reports.lowStock());
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function reportConsumption(req, res, next) {
+  try {
+    return success(res, 'Consumption report', await reports.consumption(req.query));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function reportPurchases(req, res, next) {
+  try {
+    return success(res, 'Purchase history report', await reports.purchaseHistory(req.query));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function reportWastage(req, res, next) {
+  try {
+    return success(res, 'Wastage report', await reports.wastageHistory(req.query));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function reportValuation(req, res, next) {
+  try {
+    return success(res, 'Stock valuation report', await reports.stockValuation());
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function addStock(req, res, next) {
   try {
-    return success(res, 'Stock added', await stock.addStock(req.body, req.user.id), 201);
+    return success(res, 'Stock added', await stock.addStock(req.body, req.user.id, req), 201);
   } catch (err) {
     next(err);
   }
@@ -136,7 +276,7 @@ async function addStock(req, res, next) {
 
 async function adjustStock(req, res, next) {
   try {
-    return success(res, 'Stock adjusted', await stock.adjustStock(req.body, req.user.id));
+    return success(res, 'Stock adjusted', await stock.adjustStock(req.body, req.user.id, req));
   } catch (err) {
     next(err);
   }
@@ -144,7 +284,7 @@ async function adjustStock(req, res, next) {
 
 async function recordWastage(req, res, next) {
   try {
-    return success(res, 'Wastage recorded', await stock.recordWastage(req.body, req.user.id), 201);
+    return success(res, 'Wastage recorded', await stock.recordWastage(req.body, req.user.id, req), 201);
   } catch (err) {
     next(err);
   }
@@ -245,6 +385,7 @@ module.exports = {
   createCategory,
   updateCategory,
   setCategoryStatus,
+  deleteCategory,
   listItems,
   getItem,
   createItem,
@@ -252,7 +393,23 @@ module.exports = {
   setItemStatus,
   archiveItem,
   listUnits,
+  listSuppliersLite,
   listSuppliers,
+  getSupplier,
+  createSupplier,
+  updateSupplier,
+  archiveSupplier,
+  listPurchases,
+  getPurchase,
+  createPurchase,
+  updatePurchase,
+  receivePurchase,
+  reportCurrentStock,
+  reportLowStock,
+  reportConsumption,
+  reportPurchases,
+  reportWastage,
+  reportValuation,
   addStock,
   adjustStock,
   recordWastage,
